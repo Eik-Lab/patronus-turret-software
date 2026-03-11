@@ -6,10 +6,9 @@
 
 //This code designed to work with STM32 Nucleo-H723ZG Board
 
-
 //---------------------Settings-----------------
 const unsigned long baudrate = 115200; // Must match what you configure on the ODrive 
-const long timeout_interval = 500; 
+const long feedback_interval = 100; 
 const int numMotors = 2;
 //---------------------Settings-----------------
 
@@ -21,7 +20,7 @@ const int numMotors = 2;
 //5. Begin serial communications inside setup
 
 HardwareSerial Serial5(PB12, PB13); //Rx, Tx
-HardwareSerial Serial7(PF6, PF7); //Rx, Tx
+HardwareSerial Serial7(PF6, PF7);   //Rx, Tx
 
 HardwareSerial& serial_shooter_tilt = Serial5;
 HardwareSerial& serial_shooter_pan = Serial7;
@@ -34,14 +33,11 @@ ODriveUART* motors[numMotors] = {
   &shooter_tilt,
 };
 
+int start_character = 65; //The character in ascii to start representation of motors with. A = 65
 unsigned long previousMillis = 0;
 unsigned long currentMillis = millis();
-long previousSpeed = 0;
-float motor_x = 0.0;
-float motor_y = 0.0;
-float pos_change = 0.0;
-float pos_y = 0.0;
-float positions[2];
+float positions[numMotors];
+ODriveFeedback feedback_motors[numMotors];
 String data;
 
 void setup() {
@@ -62,8 +58,7 @@ void setup() {
 }
 
 void loop() {
-  ODriveFeedback feedback_shooter_pan = shooter_pan.getFeedback();  //Do not put outside void loop. Prevents arduino board from showing up in COM
-  ODriveFeedback feedback_shooter_tilt = shooter_tilt.getFeedback();  //Do not put outside void loop. Prevents arduino board from showing up in COM
+  unsigned long currentMillis = millis();
 
   // If not in closed state enter closed state
   for (int i = 0; i < numMotors; i++) {
@@ -74,27 +69,47 @@ void loop() {
     }
   }
   digitalWrite(LED_GREEN, HIGH);
-  
-  for (int i = 0; i < numMotors; i++) {
-    motors[i]->setVelocity(1); 
-  }
 
+  //Send commands to odrive
   if (Serial.available() > 0) { 
     data = Serial.readStringUntil('\n'); 
     parse(data, positions); 
-    motor_x = positions[0]; 
-    motor_y = positions[1]; 
+    for (int i = 0; i < numMotors; i++) {
+      motors[i]->setVelocity(positions[i]); 
+    }
+    
+  }
+
+  //Send position every feedback_interval
+  if (currentMillis - previousMillis >= feedback_interval) {
+    for (int i = 0; i < numMotors; i++) {
+      feedback_motors[i] = motors[i]->getFeedback(); 
+      Serial.write(start_character+i);
+      Serial.print(feedback_motors[i].pos);
+    }
+    Serial.println();
+    previousMillis = currentMillis;
   }
 
 }
 
+//Parse data received over serial communication
 void parse(String data, float *inbound_feedback) {
-  float X_index = data.indexOf("X")+1;
-  float Y_index = data.indexOf("Y")+1;
-  inbound_feedback[0] = data.substring(X_index, Y_index).toFloat();
-  inbound_feedback[1] = data.substring(Y_index).toFloat();
+  int motor_index[numMotors];
+
+  //Finds the index of each character the represents a motor
+  for (int i = 0; i < numMotors; i++) {
+    motor_index[i] = data.indexOf(start_character+i)+1;
+  }
+
+  //Parse the string to obtain input values for motors
+  for (int i = 0; i < numMotors-1; i++) {
+    inbound_feedback[i] = data.substring(motor_index[i], motor_index[i+1]).toFloat();
+  }
+  inbound_feedback[numMotors-1] = data.substring(motor_index[numMotors-1]).toFloat();
 }
 
+//Run a setup procedure on drive motors
 void odrive_setup(ODriveUART odrive) {
   // Waiting for Odrive to enter different state
   while (odrive.getState() == AXIS_STATE_UNDEFINED) {
