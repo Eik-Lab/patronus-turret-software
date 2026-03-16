@@ -1,7 +1,7 @@
 #%%
 import serial
 
-# Config (must match ESP32 UART settings)
+# Config (must match STM32 UART settings)
 ser = serial.Serial(
     port = "COM5",
     baudrate = 115200,
