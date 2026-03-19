@@ -25,8 +25,8 @@
 /* The muxer output resolution must be set if the input streams will be of
  * different resolution. The muxer will scale all the input frames to this
  * resolution. */
-#define MUXER_OUTPUT_WIDTH 1920
-#define MUXER_OUTPUT_HEIGHT 1080
+#define MUXER_OUTPUT_WIDTH 1280
+#define MUXER_OUTPUT_HEIGHT 720
 
 /* Muxer batch formation timeout, for e.g. 40 millisec. Should ideally be set
  * based on the fastest source's framerate. */
@@ -146,9 +146,11 @@ int
 run_pipeline (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
-  GstElement *pipeline = NULL, *source = NULL, *h264parser = NULL,
-      *decoder = NULL, *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
+  GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
+      *nvvidconv_pre = NULL, *capsfilter_nvmm = NULL,
+      *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
+  GstCaps *caps_src = NULL, *caps_nvmm = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -182,17 +184,25 @@ run_pipeline (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("dstest1-pipeline");
+  pipeline = gst_pipeline_new ("patronus-mono-pipeline");
 
-  /* Source element for reading from the file */
-  source = gst_element_factory_make ("filesrc", "file-source");
+  /* Source element for Basler camera via pylonsrc */
+  source = gst_element_factory_make ("pylonsrc", "pylon-source");
 
-  /* Since the data format in the input file is elementary h264 stream,
-   * we need a h264parser */
-  h264parser = gst_element_factory_make ("h264parse", "h264-parser");
+  /* Caps filter: GRAY8 1280x720 from pylonsrc */
+  capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
+  caps_src = gst_caps_from_string ("video/x-raw,format=GRAY8,width=4096,height=3000");
+  g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
+  gst_caps_unref (caps_src);
 
-  /* Use nvdec_h264 for hardware accelerated decode on GPU */
-  decoder = gst_element_factory_make ("nvv4l2decoder", "nvv4l2-decoder");
+  /* Convert GRAY8 to NV12 in NVMM memory for streammux */
+  nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
+
+  /* Caps filter: NV12 in NVMM memory */
+  capsfilter_nvmm = gst_element_factory_make ("capsfilter", "caps-nvmm");
+  caps_nvmm = gst_caps_from_string ("video/x-raw(memory:NVMM),format=NV12");
+  g_object_set (G_OBJECT (capsfilter_nvmm), "caps", caps_nvmm, NULL);
+  gst_caps_unref (caps_nvmm);
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -227,36 +237,24 @@ run_pipeline (int argc, char *argv[])
 #endif
   }
 
-  if (!source || !h264parser || !decoder || !pgie
+  if (!source || !capsfilter_src || !nvvidconv_pre || !capsfilter_nvmm || !pgie
       || !nvvidconv || !nvosd || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
 
-  /* we set the input filename to the source element */
-  g_object_set (G_OBJECT (source), "location", argv[1], NULL);
-
-  if (g_str_has_suffix (argv[1], ".h264")) {
-    g_object_set (G_OBJECT (source), "location", argv[1], NULL);
-
-    g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
-
-    g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
-        MUXER_OUTPUT_HEIGHT,
-        "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
-
-    /* Set all the necessary properties of the nvinfer element,
-     * the necessary ones are : */
-    g_object_set (G_OBJECT (pgie),
-        "config-file-path", "dstest1_pgie_config.txt", NULL);
-  }
+  g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
+  g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
+      MUXER_OUTPUT_HEIGHT,
+      "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
 
   if (yaml_config) {
-    RETURN_ON_PARSER_ERROR(nvds_parse_file_source(source, argv[1],"source"));
     RETURN_ON_PARSER_ERROR(nvds_parse_streammux(streammux, argv[1],"streammux"));
 
     /* Set all the necessary properties of the inference element */
     RETURN_ON_PARSER_ERROR(nvds_parse_gie(pgie, argv[1], "primary-gie"));
+  } else {
+    g_object_set (G_OBJECT (pgie), "config-file-path", "dstest1_pgie_config.txt", NULL);
   }
 
   /* we add a message handler */
@@ -267,7 +265,7 @@ run_pipeline (int argc, char *argv[])
   /* Set up the pipeline */
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source, h264parser, decoder, streammux, pgie,
+      source, capsfilter_src, nvvidconv_pre, capsfilter_nvmm, streammux, pgie,
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
@@ -281,9 +279,9 @@ run_pipeline (int argc, char *argv[])
     return -1;
   }
 
-  srcpad = gst_element_get_static_pad (decoder, pad_name_src);
+  srcpad = gst_element_get_static_pad (capsfilter_nvmm, pad_name_src);
   if (!srcpad) {
-    g_printerr ("Decoder request src pad failed. Exiting.\n");
+    g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
     return -1;
   }
 
@@ -299,7 +297,7 @@ run_pipeline (int argc, char *argv[])
   /* file-source -> h264-parser -> nvh264-decoder ->
    * pgie -> nvvidconv -> nvosd -> video-renderer */
 
-  if (!gst_element_link_many (source, h264parser, decoder, NULL)) {
+  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, capsfilter_nvmm, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
   }
@@ -322,7 +320,7 @@ run_pipeline (int argc, char *argv[])
   gst_object_unref (osd_sink_pad);
 
   /* Set the pipeline to "playing" state */
-  g_print ("Using file: %s\n", argv[1]);
+  g_print ("Using pylonsrc (Basler camera)\n");
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
 
   /* Wait till pipeline encounters an error or EOS */
