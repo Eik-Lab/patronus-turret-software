@@ -8,7 +8,7 @@
 
 //---------------------Settings-----------------
 const unsigned long baudrate = 115200; // Must match what you configure on the ODrive 
-const long feedback_interval = 100; 
+const long feedback_interval = 200; 
 const int numMotors = 2;
 //---------------------Settings-----------------
 
@@ -19,23 +19,34 @@ const int numMotors = 2;
 //4. Add the ODriveUART object to the motors array
 //5. Begin serial communications inside setup
 
-HardwareSerial Serial5(PB12, PB13); //Rx, Tx
-HardwareSerial Serial7(PF6, PF7);   //Rx, Tx
+HardwareSerial Serial5(PB12, PB13); //Rx, Tx Tilt Sensor
+HardwareSerial Serial7(PF6, PF7);   //Rx, Tx Pan Sensor
+// HardwareSerial Serial1(PB15, PA9);   //Rx, Tx Tilt shooter
+// HardwareSerial Serial9(PG0, PG1);   //Rx, Tx Pan shooter
 
-HardwareSerial& serial_shooter_tilt = Serial5;
-HardwareSerial& serial_shooter_pan = Serial7;
+HardwareSerial& serial_sensor_tilt = Serial5;
+HardwareSerial& serial_sensor_pan = Serial7;
+// HardwareSerial& serial_shooter_tilt = Serial9;
+// HardwareSerial& serial_shooter_pan = Serial1;
 
-ODriveUART shooter_pan(serial_shooter_pan);
-ODriveUART shooter_tilt(serial_shooter_tilt);
+ODriveUART sensor_pan(serial_sensor_pan);
+ODriveUART sensor_tilt(serial_sensor_tilt);
+// ODriveUART shooter_pan(serial_shooter_pan);
+// ODriveUART shooter_tilt(serial_shooter_tilt);
+
 
 ODriveUART* motors[numMotors] = {
-  &shooter_pan,
-  &shooter_tilt,
+  &sensor_pan,
+  &sensor_tilt,
+  // &shooter_pan,
+  // &shooter_tilt
 };
 
 int start_character = 65; //The character in ascii to start representation of motors with. A = 65
 unsigned long previousMillis = 0;
 unsigned long currentMillis = millis();
+float pos_current = 0;
+float vel_current = 0;
 float positions[numMotors];
 ODriveFeedback feedback_motors[numMotors];
 String data;
@@ -53,8 +64,10 @@ void setup() {
   digitalWrite(LED_GREEN, LOW);
 
   //Initiate serial connection with odrive 
-  serial_shooter_pan.begin(baudrate); 
-  serial_shooter_tilt.begin(baudrate);
+  serial_sensor_pan.begin(baudrate); 
+  serial_sensor_tilt.begin(baudrate);
+  // serial_shooter_pan.begin(baudrate); 
+  // serial_shooter_tilt.begin(baudrate);
 }
 
 void loop() {
@@ -70,16 +83,6 @@ void loop() {
   }
   digitalWrite(LED_GREEN, HIGH);
 
-  //Send commands to odrive
-  if (Serial.available() > 0) { 
-    data = Serial.readStringUntil('\n'); 
-    parse(data, positions); 
-    for (int i = 0; i < numMotors; i++) {
-      motors[i]->setVelocity(positions[i]); 
-    }
-    
-  }
-
   //Send position every feedback_interval
   if (currentMillis - previousMillis >= feedback_interval) {
     for (int i = 0; i < numMotors; i++) {
@@ -90,6 +93,56 @@ void loop() {
     Serial.println();
     previousMillis = currentMillis;
   }
+
+  //Send commands to odrive
+  if (Serial.available() > 0) { 
+    data = Serial.readStringUntil('\n'); 
+    parse(data, positions); 
+  }
+
+  for (int i = 0; i < numMotors; i++) {
+    // motors[i]->setVelocity(positions[i]); 
+
+    // Movement limiter
+    // Tilt maximum range 0-0.5. 0 is straight up and 0.5 straight down
+
+    if (i == 0){
+      // If within limit, move freely
+      if (feedback_motors[i].pos > -0.20 && feedback_motors[i].pos < 0.20) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If above upper limit, only allow negative movement
+      else if (feedback_motors[i].pos >= 0.20 && positions[i] < 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If below lower limit, only allow positive movement
+      else if (feedback_motors[i].pos <= -0.20 && positions[i] > 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      else {
+        motors[i]->setVelocity(0); 
+      }
+    }
+
+
+    if (i == 1) { //Limit movement based on pan or tilt specs
+      // If within limit, move freely
+      if (feedback_motors[i].pos > 0 && feedback_motors[i].pos < 0.5) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If above upper limit, only allow negative movement
+      else if (feedback_motors[i].pos >= 0.45 && positions[i] < 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If below lower limit, only allow positive movement
+      else if (feedback_motors[i].pos <= 0 && positions[i] > 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      else {
+        motors[i]->setVelocity(0); 
+      }
+    }
+  } 
 
 }
 
@@ -110,7 +163,7 @@ void parse(String data, float *inbound_feedback) {
 }
 
 //Run a setup procedure on drive motors
-void odrive_setup(ODriveUART odrive) {
+void odrive_setup(ODriveUART& odrive) {
   // Waiting for Odrive to enter different state
   while (odrive.getState() == AXIS_STATE_UNDEFINED) {
     digitalWrite(LED_YELLOW, !digitalRead(LED_YELLOW));
