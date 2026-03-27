@@ -62,6 +62,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
       l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
         int offset = 0;
+        num_rects = 0;
+        drone_count = 0;
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
@@ -96,10 +98,10 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->text_bg_clr.alpha = 1.0;
 
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
-    }
 
-    g_print ("Frame %d | Quadrant %d | objects=%d drones=%d\n",
-            frame_number, frame_meta->source_id, num_rects, drone_count);
+        g_print ("Frame %d | Quadrant %d | objects=%d drones=%d\n",
+                frame_number, frame_meta->source_id, num_rects, drone_count);
+    }
     frame_number++;
     return GST_PAD_PROBE_OK;
 }
