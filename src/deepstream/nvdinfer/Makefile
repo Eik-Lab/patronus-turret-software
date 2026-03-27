@@ -29,14 +29,15 @@ ifeq ($(TARGET_DEVICE),aarch64)
 endif
 
 SRCS:= $(wildcard *.c)
+SRCS_CPP:= ../../main.cpp
 
 INCS:= $(wildcard *.h)
 
 PKGS:= gstreamer-1.0
 
-OBJS:= $(SRCS:.c=.o)
+OBJS:= $(SRCS:.c=.o) $(SRCS_CPP:.cpp=.o)
 
-CFLAGS+= -I../../../includes \
+CFLAGS+= -I/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes \
 		-I /usr/local/cuda-$(CUDA_VER)/include
 
 CFLAGS+= $(shell pkg-config --cflags $(PKGS))
@@ -52,13 +53,16 @@ all: $(APP)
 %.o: %.c $(INCS) Makefile
 	$(CC) -c -o $@ $(CFLAGS) $<
 
+%.o: %.cpp $(INCS) Makefile
+	$(CXX) -c -o $@ $(CFLAGS) $<
+
 $(APP): $(OBJS) Makefile
-	$(CC) -o $(APP) $(OBJS) $(LIBS)
+	$(CXX) -o $(APP) $(OBJS) $(LIBS)
 
 install: $(APP)
 	cp -rv $(APP) $(APP_INSTALL_DIR)
 
 clean:
-	rm -rf $(OBJS) $(APP)
+	rm -rf $(OBJS) $(APP) ../../main.o
 
 
