@@ -33,7 +33,7 @@ tests/
 **/*.o
 **/*.a
 **/*.so
-
+models/
 CaffeMNIST/**/build/
 
 yolo/apps/**/deepstream-yolo-app
