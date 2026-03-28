@@ -140,7 +140,7 @@ run_pipeline (int argc, char *argv[])
       *nvvidconv_pre = NULL,
       *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
-  GstCaps *caps_src = NULL;
+  GstCaps *caps_src0 = NULL, *caps_src1 = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -181,18 +181,18 @@ run_pipeline (int argc, char *argv[])
 
   /* Caps filter*/
   capsfilter_src0 = gst_element_factory_make ("capsfilter", "caps-src0");
-  caps_src0 = gst_caps_from_string ("video/x-bayer(memory:NVMM),format=RGB,width=4200,height=2160");
+  caps_src0 = gst_caps_from_string ("video/x-raw(memory:NVMM),format=RGB,width=4200,height=2160");
   g_object_set (G_OBJECT (capsfilter_src0), "caps", caps_src0, NULL);
   gst_caps_unref (caps_src0);
 
   capsfilter_src1 = gst_element_factory_make ("capsfilter", "caps-src1");
   caps_src1 = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
-  g_object_set (G_OBJECT (capsfilter_src0), "caps", caps_src0, NULL);
+  g_object_set (G_OBJECT (capsfilter_src1), "caps", caps_src1, NULL);
   gst_caps_unref (caps_src1);
 
   /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
-  nvvidconv_pre0 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
-  nvvidconv_pre1 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
+  nvvidconv_pre0 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre0");
+  nvvidconv_pre1 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre1");
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -227,7 +227,7 @@ run_pipeline (int argc, char *argv[])
 #endif
   }
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
+  if (!source0 || !source1 || !capsfilter_src0 || !capsfilter_src1 || !nvvidconv_pre0 || !nvvidconv_pre1 || !pgie || !nvvidconv || !nvosd || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
@@ -254,41 +254,52 @@ run_pipeline (int argc, char *argv[])
   /* Set up the pipeline */
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source0, source1, capsfilter_src0, capsfilter_src1, nvvidconv_pre, streammux, pgie, /* needs to add 2 pgie, don´t know how yet #TODO */
+      source0, source1, capsfilter_src0, capsfilter_src1, nvvidconv_pre0, nvvidconv_pre1, streammux, pgie, /* needs to add 2 pgie, don´t know how yet #TODO */
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
-  GstPad *sinkpad, *srcpad;
+  GstPad *sinkpad0, *srcpad0;
+  GstPad *sinkpad1, *srcpad1;
   gchar pad_name_sink[16] = "sink_0";
   gchar pad_name_src[16] = "src";
 
   sinkpad0 = gst_element_request_pad_simple(streammux, "sink_0");
   sinkpad1 = gst_element_request_pad_simple(streammux, "sink_1");
-  if (!sinkpad0) {
+  if (!sinkpad0 || !sinkpad1) {
     g_printerr ("Streammux request sink pad failed. Exiting.\n");
     return -1;
   }
 
   srcpad0 = gst_element_get_static_pad (nvvidconv_pre0, pad_name_src);
   srcpad1 = gst_element_get_static_pad (nvvidconv_pre1, pad_name_src);
-  if (!srcpad) {
+  if (!srcpad0 || !srcpad1) {
     g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
     return -1;
   }
 
-  if (gst_pad_link (srcpad, sinkpad) != GST_PAD_LINK_OK) {
+  if (gst_pad_link (srcpad0, sinkpad0) != GST_PAD_LINK_OK) {
+      g_printerr ("Failed to link decoder to stream muxer. Exiting.\n");
+      return -1;
+  }
+  if (gst_pad_link (srcpad1, sinkpad1) != GST_PAD_LINK_OK) {
       g_printerr ("Failed to link decoder to stream muxer. Exiting.\n");
       return -1;
   }
 
-  gst_object_unref (sinkpad);
-  gst_object_unref (srcpad);
+  gst_object_unref (sinkpad0);
+  gst_object_unref (sinkpad1);
+  gst_object_unref (srcpad0);
+  gst_object_unref (srcpad1);
 
   /* we link the elements together */
   /* file-source -> h264-parser -> nvh264-decoder ->
    * pgie -> nvvidconv -> nvosd -> video-renderer */
 
-  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
+  if (!gst_element_link_many (source0, capsfilter_src0, nvvidconv_pre0, NULL)) {
+    g_printerr ("Elements could not be linked: 1. Exiting.\n");
+    return -1;
+  }
+  if (!gst_element_link_many (source1, capsfilter_src1, nvvidconv_pre1, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
   }
