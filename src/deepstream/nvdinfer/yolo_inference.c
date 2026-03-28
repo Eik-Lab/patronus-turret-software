@@ -136,7 +136,7 @@ int
 run_pipeline (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
-  GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
+  GstElement *pipeline = NULL, *source0 = NULL, *source1 = NULL, *capsfilter_src0 = NULL, *capsfilter_src1 = NULL,
       *nvvidconv_pre = NULL,
       *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
@@ -173,19 +173,26 @@ run_pipeline (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("patronus-mono-pipeline");
+  pipeline = gst_pipeline_new ("patronus-pipeline");
 
   /* Source element for Basler camera via pylonsrc */
-  source = gst_element_factory_make ("pylonsrc", "pylon-source");
+  source0 = gst_element_factory_make ("pylonsrc", "pylon-source0");
+  source1 = gst_element_factory_make ("pylonsrc", "pylon-source1");
 
-  /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
-  capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
-  g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
-  gst_caps_unref (caps_src);
+  /* Caps filter*/
+  capsfilter_src0 = gst_element_factory_make ("capsfilter", "caps-src0");
+  caps_src0 = gst_caps_from_string ("video/x-bayer(memory:NVMM),format=RGB,width=4200,height=2160");
+  g_object_set (G_OBJECT (capsfilter_src0), "caps", caps_src0, NULL);
+  gst_caps_unref (caps_src0);
+
+  capsfilter_src1 = gst_element_factory_make ("capsfilter", "caps-src1");
+  caps_src1 = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
+  g_object_set (G_OBJECT (capsfilter_src0), "caps", caps_src0, NULL);
+  gst_caps_unref (caps_src1);
 
   /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
-  nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
+  nvvidconv_pre0 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
+  nvvidconv_pre1 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -225,7 +232,7 @@ run_pipeline (int argc, char *argv[])
     return -1;
   }
 
-  g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
+  g_object_set (G_OBJECT (streammux), "batch-size", 2, NULL);
   g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
       MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
       "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
@@ -247,7 +254,7 @@ run_pipeline (int argc, char *argv[])
   /* Set up the pipeline */
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source, capsfilter_src, nvvidconv_pre, streammux, pgie,
+      source0, source1, capsfilter_src0, capsfilter_src1, nvvidconv_pre, streammux, pgie, /* needs to add 2 pgie, don´t know how yet #TODO */
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
@@ -255,13 +262,15 @@ run_pipeline (int argc, char *argv[])
   gchar pad_name_sink[16] = "sink_0";
   gchar pad_name_src[16] = "src";
 
-  sinkpad = gst_element_request_pad_simple (streammux, pad_name_sink);
-  if (!sinkpad) {
+  sinkpad0 = gst_element_request_pad_simple(streammux, "sink_0");
+  sinkpad1 = gst_element_request_pad_simple(streammux, "sink_1");
+  if (!sinkpad0) {
     g_printerr ("Streammux request sink pad failed. Exiting.\n");
     return -1;
   }
 
-  srcpad = gst_element_get_static_pad (nvvidconv_pre, pad_name_src);
+  srcpad0 = gst_element_get_static_pad (nvvidconv_pre0, pad_name_src);
+  srcpad1 = gst_element_get_static_pad (nvvidconv_pre1, pad_name_src);
   if (!srcpad) {
     g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
     return -1;
