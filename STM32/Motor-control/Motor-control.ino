@@ -8,8 +8,8 @@
 
 //---------------------Settings-----------------
 const unsigned long baudrate = 115200; // Must match what you configure on the ODrive 
-const long feedback_interval = 200; 
-const int numMotors = 2;
+const long feedback_interval = 100; 
+const int numMotors = 4;
 //---------------------Settings-----------------
 
 //Adding additional motors
@@ -21,25 +21,25 @@ const int numMotors = 2;
 
 HardwareSerial Serial5(PB12, PB13); //Rx, Tx Tilt Sensor
 HardwareSerial Serial7(PF6, PF7);   //Rx, Tx Pan Sensor
-// HardwareSerial Serial1(PB15, PA9);   //Rx, Tx Tilt shooter
-// HardwareSerial Serial9(PG0, PG1);   //Rx, Tx Pan shooter
+HardwareSerial Serial6(PC7, PC6);   //Rx, Tx Tilt shooter
+HardwareSerial Serial9(PG0, PG1);   //Rx, Tx Pan shooter
 
 HardwareSerial& serial_sensor_tilt = Serial5;
 HardwareSerial& serial_sensor_pan = Serial7;
-// HardwareSerial& serial_shooter_tilt = Serial9;
-// HardwareSerial& serial_shooter_pan = Serial1;
+HardwareSerial& serial_shooter_tilt = Serial6;
+HardwareSerial& serial_shooter_pan = Serial9;
 
 ODriveUART sensor_pan(serial_sensor_pan);
 ODriveUART sensor_tilt(serial_sensor_tilt);
-// ODriveUART shooter_pan(serial_shooter_pan);
-// ODriveUART shooter_tilt(serial_shooter_tilt);
+ODriveUART shooter_pan(serial_shooter_pan);
+ODriveUART shooter_tilt(serial_shooter_tilt);
 
 
 ODriveUART* motors[numMotors] = {
-  &sensor_pan,
-  &sensor_tilt,
-  // &shooter_pan,
-  // &shooter_tilt
+  &sensor_pan, //A
+  &sensor_tilt,//B
+  &shooter_pan,//C
+  &shooter_tilt//D
 };
 
 int start_character = 65; //The character in ascii to start representation of motors with. A = 65
@@ -47,7 +47,7 @@ unsigned long previousMillis = 0;
 unsigned long currentMillis = millis();
 float pos_current = 0;
 float vel_current = 0;
-float positions[numMotors];
+float positions[numMotors] = {0, 0, 0, 0};
 ODriveFeedback feedback_motors[numMotors];
 String data;
 
@@ -66,8 +66,8 @@ void setup() {
   //Initiate serial connection with odrive 
   serial_sensor_pan.begin(baudrate); 
   serial_sensor_tilt.begin(baudrate);
-  // serial_shooter_pan.begin(baudrate); 
-  // serial_shooter_tilt.begin(baudrate);
+  serial_shooter_pan.begin(baudrate); 
+  serial_shooter_tilt.begin(baudrate);
 }
 
 void loop() {
@@ -100,23 +100,22 @@ void loop() {
     parse(data, positions); 
   }
 
+  //Limit movement based on pan or tilt specs
   for (int i = 0; i < numMotors; i++) {
-    // motors[i]->setVelocity(positions[i]); 
-
     // Movement limiter
     // Tilt maximum range 0-0.5. 0 is straight up and 0.5 straight down
 
-    if (i == 0){
+    if (i == 0){ // Sensor Pan
       // If within limit, move freely
-      if (feedback_motors[i].pos > -0.20 && feedback_motors[i].pos < 0.20) {
+      if (feedback_motors[i].pos > -2.5 && feedback_motors[i].pos < 2.5) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 0.20 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= 2.5 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= -0.20 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= -2.5 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
@@ -125,17 +124,54 @@ void loop() {
     }
 
 
-    if (i == 1) { //Limit movement based on pan or tilt specs
+    if (i == 1) { // Sensor Tilt
       // If within limit, move freely
-      if (feedback_motors[i].pos > 0 && feedback_motors[i].pos < 0.5) {
+      if (feedback_motors[i].pos < 0 && feedback_motors[i].pos > -0.40) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 0.45 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= 0 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= 0 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= -0.4 && positions[i] > 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      else {
+        motors[i]->setVelocity(0); 
+      }
+    }
+
+    if (i == 2){ // Shooter Pan
+      // If within limit, move freely
+      if (feedback_motors[i].pos > -2.5 && feedback_motors[i].pos < 2.5) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If above upper limit, only allow negative movement
+      else if (feedback_motors[i].pos >= 2.5 && positions[i] < 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If below lower limit, only allow positive movement
+      else if (feedback_motors[i].pos <= -2.5 && positions[i] > 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      else {
+        motors[i]->setVelocity(0); 
+      }
+    }
+
+
+    if (i == 3) { // Shooter Tilt
+      // If within limit, move freely
+      if (feedback_motors[i].pos < 0 && feedback_motors[i].pos > -0.40) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If above upper limit, only allow negative movement
+      else if (feedback_motors[i].pos >= 0 && positions[i] < 0) {
+        motors[i]->setVelocity(positions[i]); 
+      }
+      // If below lower limit, only allow positive movement
+      else if (feedback_motors[i].pos <= -0.4 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
