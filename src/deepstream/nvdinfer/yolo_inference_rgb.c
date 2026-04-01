@@ -40,6 +40,8 @@
 
 gint frame_number_rgb = 0;
 gchar pgie_classes_str_rgb[1][32] = { "Drone" };
+gfloat drone_bbox_left_rgb = 0, drone_bbox_top_rgb = 0;
+gfloat drone_bbox_width_rgb = 0, drone_bbox_height_rgb = 0;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -68,6 +70,10 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
                 drone_count++;
                 num_rects++;
+                drone_bbox_left_rgb   = obj_meta->rect_params.left;
+                drone_bbox_top_rgb    = obj_meta->rect_params.top;
+                drone_bbox_width_rgb  = obj_meta->rect_params.width;
+                drone_bbox_height_rgb = obj_meta->rect_params.height;
             }
         }
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
