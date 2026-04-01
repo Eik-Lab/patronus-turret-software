@@ -38,8 +38,8 @@
     return -1; \
   }
 
-gint frame_number = 0;
-gchar pgie_classes_str[1][32] = { "Drone" };
+gint frame_number_mono = 0;
+gchar pgie_classes_str_mono[1][32] = { "Drone" };
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -99,8 +99,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     }
 
     g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            frame_number, num_rects, drone_count);
-    frame_number++;
+            frame_number_mono, num_rects, drone_count);
+    frame_number_mono++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -133,7 +133,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline (int argc, char *argv[])
+run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
@@ -177,6 +177,7 @@ run_pipeline (int argc, char *argv[])
 
   /* Source element for Basler camera via pylonsrc */
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
+  g_object_set (G_OBJECT (source), "device-serial-number", "41882812", NULL);
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");

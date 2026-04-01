@@ -38,8 +38,8 @@
     return -1; \
   }
 
-gint frame_number = 0;
-gchar pgie_classes_str[1][32] = { "Drone" };
+gint frame_number_rgb = 0;
+gchar pgie_classes_str_rgb[1][32] = { "Drone" };
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -99,8 +99,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     }
 
     g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            frame_number, num_rects, drone_count);
-    frame_number++;
+            frame_number_rgb, num_rects, drone_count);
+    frame_number_rgb++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -133,14 +133,14 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline (int argc, char *argv[])
+run_pipeline_rgb (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
-  GstElement *pipeline = NULL, *source0 = NULL, *source1 = NULL, *capsfilter_src0 = NULL, *capsfilter_src1 = NULL,
+  GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
       *nvvidconv_pre = NULL,
       *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
-  GstCaps *caps_src0 = NULL, *caps_src1 = NULL;
+  GstCaps *caps_src = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -173,26 +173,20 @@ run_pipeline (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("patronus-pipeline");
+  pipeline = gst_pipeline_new ("patronus-rgb-pipeline");
 
   /* Source element for Basler camera via pylonsrc */
-  source0 = gst_element_factory_make ("pylonsrc", "pylon-source0");
-  source1 = gst_element_factory_make ("pylonsrc", "pylon-source1");
+  source = gst_element_factory_make ("pylonsrc", "pylon-source");
+  g_object_set (G_OBJECT (source), "device-serial-number", "41882813", NULL);
 
-  /* Caps filter*/
-  capsfilter_src0 = gst_element_factory_make ("capsfilter", "caps-src0");
-  caps_src0 = gst_caps_from_string ("video/x-raw(memory:NVMM),format=RGB,width=4200,height=2160");
-  g_object_set (G_OBJECT (capsfilter_src0), "caps", caps_src0, NULL);
-  gst_caps_unref (caps_src0);
-
-  capsfilter_src1 = gst_element_factory_make ("capsfilter", "caps-src1");
-  caps_src1 = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
-  g_object_set (G_OBJECT (capsfilter_src1), "caps", caps_src1, NULL);
-  gst_caps_unref (caps_src1);
+  /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
+  capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=YUY2,width=1920,height=1080");
+  g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
+  gst_caps_unref (caps_src);
 
   /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
-  nvvidconv_pre0 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre0");
-  nvvidconv_pre1 = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre1");
+  nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -227,12 +221,12 @@ run_pipeline (int argc, char *argv[])
 #endif
   }
 
-  if (!source0 || !source1 || !capsfilter_src0 || !capsfilter_src1 || !nvvidconv_pre0 || !nvvidconv_pre1 || !pgie || !nvvidconv || !nvosd || !sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
 
-  g_object_set (G_OBJECT (streammux), "batch-size", 2, NULL);
+  g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
   g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
       MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
       "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
@@ -254,52 +248,39 @@ run_pipeline (int argc, char *argv[])
   /* Set up the pipeline */
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source0, source1, capsfilter_src0, capsfilter_src1, nvvidconv_pre0, nvvidconv_pre1, streammux, pgie, /* needs to add 2 pgie, don´t know how yet #TODO */
+      source, capsfilter_src, nvvidconv_pre, streammux, pgie,
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
-  GstPad *sinkpad0, *srcpad0;
-  GstPad *sinkpad1, *srcpad1;
+  GstPad *sinkpad, *srcpad;
   gchar pad_name_sink[16] = "sink_0";
   gchar pad_name_src[16] = "src";
 
-  sinkpad0 = gst_element_request_pad_simple(streammux, "sink_0");
-  sinkpad1 = gst_element_request_pad_simple(streammux, "sink_1");
-  if (!sinkpad0 || !sinkpad1) {
+  sinkpad = gst_element_request_pad_simple (streammux, pad_name_sink);
+  if (!sinkpad) {
     g_printerr ("Streammux request sink pad failed. Exiting.\n");
     return -1;
   }
 
-  srcpad0 = gst_element_get_static_pad (nvvidconv_pre0, pad_name_src);
-  srcpad1 = gst_element_get_static_pad (nvvidconv_pre1, pad_name_src);
-  if (!srcpad0 || !srcpad1) {
+  srcpad = gst_element_get_static_pad (nvvidconv_pre, pad_name_src);
+  if (!srcpad) {
     g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
     return -1;
   }
 
-  if (gst_pad_link (srcpad0, sinkpad0) != GST_PAD_LINK_OK) {
-      g_printerr ("Failed to link decoder to stream muxer. Exiting.\n");
-      return -1;
-  }
-  if (gst_pad_link (srcpad1, sinkpad1) != GST_PAD_LINK_OK) {
+  if (gst_pad_link (srcpad, sinkpad) != GST_PAD_LINK_OK) {
       g_printerr ("Failed to link decoder to stream muxer. Exiting.\n");
       return -1;
   }
 
-  gst_object_unref (sinkpad0);
-  gst_object_unref (sinkpad1);
-  gst_object_unref (srcpad0);
-  gst_object_unref (srcpad1);
+  gst_object_unref (sinkpad);
+  gst_object_unref (srcpad);
 
   /* we link the elements together */
   /* file-source -> h264-parser -> nvh264-decoder ->
    * pgie -> nvvidconv -> nvosd -> video-renderer */
 
-  if (!gst_element_link_many (source0, capsfilter_src0, nvvidconv_pre0, NULL)) {
-    g_printerr ("Elements could not be linked: 1. Exiting.\n");
-    return -1;
-  }
-  if (!gst_element_link_many (source1, capsfilter_src1, nvvidconv_pre1, NULL)) {
+  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
   }
