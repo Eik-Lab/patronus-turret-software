@@ -33,7 +33,7 @@ tests/
 **/*.o
 **/*.a
 **/*.so
-
+models/
 CaffeMNIST/**/build/
 
 yolo/apps/**/deepstream-yolo-app
@@ -45,3 +45,5 @@ yolo/data/**/*.png
 yolo/**/build/
 senet/**/build/
 anomaly/**/build/
+
+src/deepstream/DeepStream-Yolo/

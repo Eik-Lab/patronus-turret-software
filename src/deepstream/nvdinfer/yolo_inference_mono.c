@@ -19,14 +19,13 @@
 
 #define MAX_DISPLAY_LEN 64
 
-#define PGIE_CLASS_ID_VEHICLE 0
-#define PGIE_CLASS_ID_PERSON 2
+#define PGIE_CLASS_ID_DRONE 0
 
 /* The muxer output resolution must be set if the input streams will be of
  * different resolution. The muxer will scale all the input frames to this
  * resolution. */
 #define MUXER_OUTPUT_WIDTH 1920
-#define MUXER_OUTPUT_HEIGHT 1080
+#define MUXER_OUTPUT_HEIGHT 1088
 
 /* Muxer batch formation timeout, for e.g. 40 millisec. Should ideally be set
  * based on the fastest source's framerate. */
@@ -39,10 +38,10 @@
     return -1; \
   }
 
-gint frame_number = 0;
-gchar pgie_classes_str[4][32] = { "Vehicle", "TwoWheeler", "Person",
-  "Roadsign"
-};
+gint frame_number_mono = 0;
+gchar pgie_classes_str_mono[1][32] = { "Drone" };
+gfloat drone_bbox_left_mono = 0, drone_bbox_top_mono = 0;
+gfloat drone_bbox_width_mono = 0, drone_bbox_height_mono = 0;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -54,8 +53,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     GstBuffer *buf = (GstBuffer *) info->data;
     guint num_rects = 0;
     NvDsObjectMeta *obj_meta = NULL;
-    guint vehicle_count = 0;
-    guint person_count = 0;
+    guint drone_count = 0;
     NvDsMetaList * l_frame = NULL;
     NvDsMetaList * l_obj = NULL;
     NvDsDisplayMeta *display_meta = NULL;
@@ -69,21 +67,20 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
-            if (obj_meta->class_id == PGIE_CLASS_ID_VEHICLE) {
-                vehicle_count++;
+            if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
+                drone_count++;
                 num_rects++;
-            }
-            if (obj_meta->class_id == PGIE_CLASS_ID_PERSON) {
-                person_count++;
-                num_rects++;
+                drone_bbox_left_mono   = obj_meta->rect_params.left;
+                drone_bbox_top_mono    = obj_meta->rect_params.top;
+                drone_bbox_width_mono  = obj_meta->rect_params.width;
+                drone_bbox_height_mono = obj_meta->rect_params.height;
             }
         }
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
         txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
-        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Person = %d ", person_count);
-        offset = snprintf(txt_params->display_text + offset , MAX_DISPLAY_LEN, "Vehicle = %d ", vehicle_count);
+        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
         /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
@@ -107,10 +104,9 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
 
-    g_print ("Frame Number = %d Number of objects = %d "
-            "Vehicle Count = %d Person Count = %d\n",
-            frame_number, num_rects, vehicle_count, person_count);
-    frame_number++;
+    g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
+            frame_number_mono, num_rects, drone_count);
+    frame_number_mono++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -143,12 +139,14 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline (int argc, char *argv[])
+run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
-  GstElement *pipeline = NULL, *source = NULL, *h264parser = NULL,
-      *decoder = NULL, *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
+  GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
+      *nvvidconv_pre = NULL,
+      *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
+  GstCaps *caps_src = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -162,8 +160,7 @@ run_pipeline (int argc, char *argv[])
   cudaGetDeviceProperties(&prop, current_device);
   /* Check input arguments */
   if (argc != 2) {
-    g_printerr ("Usage: %s <yml file>\n", argv[0]);
-    g_printerr ("OR: %s <H264 filename>\n", argv[0]);
+    g_printerr ("Usage: %s <nvinfer config file or yml>\n", argv[0]);
     return -1;
   }
 
@@ -182,17 +179,20 @@ run_pipeline (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("dstest1-pipeline");
+  pipeline = gst_pipeline_new ("patronus-mono-pipeline");
 
-  /* Source element for reading from the file */
-  source = gst_element_factory_make ("filesrc", "file-source");
+  /* Source element for Basler camera via pylonsrc */
+  source = gst_element_factory_make ("pylonsrc", "pylon-source");
+  g_object_set (G_OBJECT (source), "device-serial-number", "41882812", NULL);
 
-  /* Since the data format in the input file is elementary h264 stream,
-   * we need a h264parser */
-  h264parser = gst_element_factory_make ("h264parse", "h264-parser");
+  /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
+  capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
+  g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
+  gst_caps_unref (caps_src);
 
-  /* Use nvdec_h264 for hardware accelerated decode on GPU */
-  decoder = gst_element_factory_make ("nvv4l2decoder", "nvv4l2-decoder");
+  /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
+  nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -227,36 +227,23 @@ run_pipeline (int argc, char *argv[])
 #endif
   }
 
-  if (!source || !h264parser || !decoder || !pgie
-      || !nvvidconv || !nvosd || !sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
 
-  /* we set the input filename to the source element */
-  g_object_set (G_OBJECT (source), "location", argv[1], NULL);
-
-  if (g_str_has_suffix (argv[1], ".h264")) {
-    g_object_set (G_OBJECT (source), "location", argv[1], NULL);
-
-    g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
-
-    g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
-        MUXER_OUTPUT_HEIGHT,
-        "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
-
-    /* Set all the necessary properties of the nvinfer element,
-     * the necessary ones are : */
-    g_object_set (G_OBJECT (pgie),
-        "config-file-path", "dstest1_pgie_config.txt", NULL);
-  }
+  g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
+  g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
+      MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
+      "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
 
   if (yaml_config) {
-    RETURN_ON_PARSER_ERROR(nvds_parse_file_source(source, argv[1],"source"));
     RETURN_ON_PARSER_ERROR(nvds_parse_streammux(streammux, argv[1],"streammux"));
 
     /* Set all the necessary properties of the inference element */
     RETURN_ON_PARSER_ERROR(nvds_parse_gie(pgie, argv[1], "primary-gie"));
+  } else {
+    g_object_set (G_OBJECT (pgie), "config-file-path", argv[1], NULL);
   }
 
   /* we add a message handler */
@@ -267,7 +254,7 @@ run_pipeline (int argc, char *argv[])
   /* Set up the pipeline */
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source, h264parser, decoder, streammux, pgie,
+      source, capsfilter_src, nvvidconv_pre, streammux, pgie,
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
@@ -281,9 +268,9 @@ run_pipeline (int argc, char *argv[])
     return -1;
   }
 
-  srcpad = gst_element_get_static_pad (decoder, pad_name_src);
+  srcpad = gst_element_get_static_pad (nvvidconv_pre, pad_name_src);
   if (!srcpad) {
-    g_printerr ("Decoder request src pad failed. Exiting.\n");
+    g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
     return -1;
   }
 
@@ -299,7 +286,7 @@ run_pipeline (int argc, char *argv[])
   /* file-source -> h264-parser -> nvh264-decoder ->
    * pgie -> nvvidconv -> nvosd -> video-renderer */
 
-  if (!gst_element_link_many (source, h264parser, decoder, NULL)) {
+  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
   }
@@ -322,7 +309,7 @@ run_pipeline (int argc, char *argv[])
   gst_object_unref (osd_sink_pad);
 
   /* Set the pipeline to "playing" state */
-  g_print ("Using file: %s\n", argv[1]);
+  g_print ("Using pylonsrc (Basler camera)\n");
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
 
   /* Wait till pipeline encounters an error or EOS */

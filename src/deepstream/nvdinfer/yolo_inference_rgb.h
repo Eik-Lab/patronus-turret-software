@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-int run_pipeline(int argc, char *argv[]);
+int run_pipeline_rgb(int argc, char *argv[]);
 
 #ifdef __cplusplus
 }
