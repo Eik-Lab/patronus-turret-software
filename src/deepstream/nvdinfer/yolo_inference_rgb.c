@@ -16,6 +16,7 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
+#include <mutex>
 #include <queue>
 #include <vector>
 
@@ -42,7 +43,8 @@
 
 gint frame_number_rgb = 0;
 gchar pgie_classes_str_rgb[1][32] = { "Drone" };
-queue<NvDsObjectMeta> detection_rgb;
+std::queue<NvDsObjectMeta> detection_rgb;
+extern std::mutex detection_rgb_mutex;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -64,19 +66,21 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
-        int offset = 0;
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
+                std::lock_guard<std::mutex> lock(detection_rgb_mutex);
                 detection_rgb.push(*obj_meta);
+                drone_count++;
             }
         }
+        num_rects = frame_meta->num_obj_meta;
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
         txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
-        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
+        snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
         /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
