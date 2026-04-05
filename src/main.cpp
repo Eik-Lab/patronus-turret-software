@@ -2,12 +2,37 @@
 #include "deepstream/nvdinfer/yolo_inference_mono.h"
 #include <thread>
 #include <cstdio>
+#include "gstnvdsmeta.h"
 
-extern "C" {
-    extern float drone_bbox_left_rgb, drone_bbox_top_rgb;
-    extern float drone_bbox_width_rgb, drone_bbox_height_rgb;
-    extern float drone_bbox_left_mono, drone_bbox_top_mono;
-    extern float drone_bbox_width_mono, drone_bbox_height_mono;
+std::mutex detection_rgb;
+std::mutex detection_mono;
+
+
+//TODO: find correct import for struct
+extern NvDsObjectMeta detection_rgb;
+extern NvDsObjectMeta detection_mono;
+
+
+void increment_rgb(){
+    detection_rgb.lock(); 
+    float left = detection_rgb -> rect_params.left; 
+    float top = detection_rgb -> rect_params.top; 
+    float width = detection_rgb -> rect_params.width; 
+    float height = detection_rgb -> rect_params.height;
+    float cx = left + width / 2.0f;
+    float cy = top - height / 2.0f;
+    detection_rgb.unlock();
+}
+
+void increment_mono(){
+    detection_mono.lock(); 
+    float left = detection_mono -> rect_params.left; 
+    float top = detection_mono -> rect_params.top; 
+    float width = detection_mono -> rect_params.width; 
+    float height = detection_mono -> rect_params.height;
+    float cx = left + width / 2.0f;
+    float cy = top - height / 2.0f;
+    detection_mono.unlock();
 }
 
 int main(int argc, char *argv[])
@@ -28,11 +53,7 @@ int main(int argc, char *argv[])
         run_pipeline_mono(2,mono_argv)
     });
     //TODO: add loop for tracking, choosing detection logic, send to motors. Later point Kalman filter
-    float cx = drone_bbox_left_rgb + drone_bbox_width_rgb / 2.0f;                                                                                                                                                            
-    float cy = drone_bbox_top_rgb  + drone_bbox_height_rgb / 2.0f;
 
-    float cx = drone_bbox_left_mono + drone_bbox_width_mono / 2.0f;                                                                                                                                                            
-    float cy = drone_bbox_top_mono  + drone_bbox_height_mono / 2.0f;
     rgb_thread.join();
     return 0;
 }
