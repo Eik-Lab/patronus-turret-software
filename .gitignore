@@ -33,6 +33,7 @@ tests/
 **/*.o
 **/*.a
 **/*.so
+.DS_Store
 models/
 CaffeMNIST/**/build/
 

@@ -1,4 +1,4 @@
-#include "communication.hpp"
+#include "motor_comm.h"
 
 #include <iostream>
 #include <unistd.h>
@@ -6,8 +6,26 @@
 #include <termios.h>
 #include <cstring>
 
+static speed_t baud_to_speed(int baud)
+{
+    switch (baud) {
+        case 9600:   return B9600;
+        case 19200:  return B19200;
+        case 38400:  return B38400;
+        case 57600:  return B57600;
+        case 115200: return B115200;
+        default:
+            std::cerr << "Unsupported baud rate: " << baud << "\n";
+            return B0;
+    }
+}
+
 Communication::Communication(const std::string& port, int baud)
 {
+    speed_t speed = baud_to_speed(baud);
+    if (speed == B0)
+        return;
+
     fd = open(port.c_str(), O_RDWR | O_NOCTTY);
 
     if (fd < 0) {
@@ -18,8 +36,8 @@ Communication::Communication(const std::string& port, int baud)
     struct termios tty{};
     tcgetattr(fd, &tty);
 
-    cfsetospeed(&tty, B115200);
-    cfsetispeed(&tty, B115200);
+    cfsetospeed(&tty, speed);
+    cfsetispeed(&tty, speed);
 
     tty.c_cflag |= (CLOCAL | CREAD);
     tty.c_cflag &= ~PARENB;
