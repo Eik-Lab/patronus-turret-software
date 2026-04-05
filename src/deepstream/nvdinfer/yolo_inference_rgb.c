@@ -69,7 +69,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-                detection_rgb.push(obj_meta)
+                detection_rgb.push(*obj_meta);
             }
         }
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);

@@ -40,7 +40,7 @@
 
 gint frame_number_mono = 0;
 gchar pgie_classes_str_mono[1][32] = { "Drone" };
-queue<NvDsObjectMeta> detection_rgb;
+queue<NvDsObjectMeta> detection_mono;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -67,7 +67,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-              detection_mono.push(obj_meta)
+              detection_mono.push(*obj_meta);
             }
         }
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
