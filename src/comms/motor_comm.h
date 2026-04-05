@@ -9,5 +9,5 @@ public:
     std::string read();
 
 private:
-    int fd;
+    int fd = -1;
 };
