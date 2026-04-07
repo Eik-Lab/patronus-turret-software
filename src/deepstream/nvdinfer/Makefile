@@ -32,10 +32,10 @@ INCS:= $(wildcard *.h)
 
 PKGS:= gstreamer-1.0
 
-SRCS:= yolo_inference_mono.c yolo_inference_rgb.c
-SRCS_CPP:= ../../main.cpp
+SRCS_CPP:= yolo_inference_mono.cpp yolo_inference_rgb.cpp ../../main.cpp
 
-OBJS:= $(SRCS:.c=.o) $(SRCS_CPP:.cpp=.o)
+
+OBJS:= $(SRCS_CPP:.cpp=.o)
 
 CFLAGS+= -I/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes \
 		-I /usr/local/cuda-$(CUDA_VER)/include \
@@ -50,9 +50,6 @@ LIBS+= -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
 		-lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) -lpthread \
 
 all: $(APP)
-
-%.o: %.c $(INCS) Makefile
-	$(CC) -c -o $@ $(CFLAGS) $<
 
 %.o: %.cpp $(INCS) Makefile
 	$(CXX) -c -o $@ $(CFLAGS) $<

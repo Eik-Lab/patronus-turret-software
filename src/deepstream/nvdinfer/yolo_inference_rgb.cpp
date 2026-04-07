@@ -79,7 +79,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
-        txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
+        txt_params->display_text = (char*) g_malloc0 (MAX_DISPLAY_LEN);
         snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
         /* Now set the offsets where the string should appear */
@@ -87,7 +87,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->y_offset = 12;
 
         /* Font , font-color and font-size */
-        txt_params->font_params.font_name = "Serif";
+        txt_params->font_params.font_name = (char*) "Serif";
         txt_params->font_params.font_size = 10;
         txt_params->font_params.font_color.red = 1.0;
         txt_params->font_params.font_color.green = 1.0;

@@ -1,8 +1,8 @@
 [property]
 gpu-id=0
 net-scale-factor=0.0039215697906911373
-model-engine-file=../../../models/yolov8_p2.onnx_b1_gpu0_fp16.engine
-onnx-file=../../../models/yolov8_p2.onnx
+model-engine-file=../../../models/yolov8_mono.onnx_b1_gpu0_fp16.engine
+onnx-file=../../../models/yolov8_mono.onnx
 labelfile-path=labels.txt
 batch-size=1
 network-mode=2
@@ -17,7 +17,7 @@ symmetric-padding=1
 ## Custom YOLOv8 bounding box parser
 ## Requires DeepStream-Yolo custom lib: libnvdsinfer_custom_impl_Yolo.so
 ## See: https://github.com/marcoslucianops/DeepStream-Yolo
-custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+custom-lib-path=../nvdinfer/libnvdsinfer_custom_impl_Yolo.so
 parse-bbox-func-name=NvDsInferParseYolo
 output-blob-names=output0
 
