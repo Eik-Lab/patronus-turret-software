@@ -70,6 +70,9 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
                 std::lock_guard<std::mutex> lock(detection_mono_mutex);
+                if (detection_mono.size() >= 5) {
+                  detection_mono.pop(); 
+                }
                 detection_mono.push(*obj_meta);
                 drone_count++;
             }
