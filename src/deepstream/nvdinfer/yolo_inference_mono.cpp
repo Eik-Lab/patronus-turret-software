@@ -16,8 +16,7 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
-#include <mutex>
-#include <queue>
+#include "../../state.hpp"
 
 #define MAX_DISPLAY_LEN 64
 
@@ -42,8 +41,7 @@
 
 gint frame_number_mono = 0;
 gchar pgie_classes_str_mono[1][32] = { "Drone" };
-std::queue<NvDsObjectMeta> detection_mono;
-extern std::mutex detection_mono_mutex;
+extern ThreadSafeQueue<NvDsObjectMeta> detection_mono;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -69,10 +67,6 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-                std::lock_guard<std::mutex> lock(detection_mono_mutex);
-                if (detection_mono.size() >= 5) {
-                  detection_mono.pop(); 
-                }
                 detection_mono.push(*obj_meta);
                 drone_count++;
             }

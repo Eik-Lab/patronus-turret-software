@@ -16,8 +16,7 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
-#include <mutex>
-#include <queue>
+#include "../../state.hpp"
 #include <vector>
 
 #define MAX_DISPLAY_LEN 64
@@ -43,8 +42,7 @@
 
 gint frame_number_rgb = 0;
 gchar pgie_classes_str_rgb[1][32] = { "Drone" };
-std::queue<NvDsObjectMeta> detection_rgb;
-extern std::mutex detection_rgb_mutex;
+extern ThreadSafeQueue<NvDsObjectMeta> detection_rgb;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -70,10 +68,6 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-                std::lock_guard<std::mutex> lock(detection_rgb_mutex);
-                if (detection_rgb.size() >= 5) {
-                  detection_rgb.pop(); 
-                }
                 detection_rgb.push(*obj_meta);
                 drone_count++;
             }

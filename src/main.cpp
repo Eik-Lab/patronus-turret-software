@@ -2,8 +2,6 @@
 #include "deepstream/nvdinfer/yolo_inference_rgb.h"
 #include "state.hpp"
 #include <cstdio>
-#include <mutex>
-#include <queue>
 #include <thread>
 
 struct Point {
@@ -11,11 +9,8 @@ struct Point {
   float cy;
 };
 
-std::mutex detection_rgb_mutex;
-std::mutex detection_mono_mutex;
-
-extern std::queue<NvDsObjectMeta> detection_rgb;
-extern std::queue<NvDsObjectMeta> detection_mono;
+ThreadSafeQueue<NvDsObjectMeta> detection_rgb(5);
+ThreadSafeQueue<NvDsObjectMeta> detection_mono(5);
 
 Point compute_center(const NvDsObjectMeta& obj) {
   float left = obj.rect_params.left;
@@ -23,22 +18,6 @@ Point compute_center(const NvDsObjectMeta& obj) {
   float width = obj.rect_params.width;
   float height = obj.rect_params.height;
   return {left + width / 2.0f, top + height / 2.0f};
-}
-
-bool try_pop_rgb(NvDsObjectMeta& out) {
-  std::lock_guard<std::mutex> lock(detection_rgb_mutex);
-  if (detection_rgb.empty()) return false;
-  out = detection_rgb.front();
-  detection_rgb.pop();
-  return true;
-}
-
-bool try_pop_mono(NvDsObjectMeta& out) {
-  std::lock_guard<std::mutex> lock(detection_mono_mutex);
-  if (detection_mono.empty()) return false;
-  out = detection_mono.front();
-  detection_mono.pop();
-  return true;
 }
 
 int main(int argc, char *argv[]) {
@@ -56,17 +35,18 @@ int main(int argc, char *argv[]) {
   // TODO: add loop for tracking, choosing detection logic, send to motors.
   // Later point Kalman filter
   std::thread tracking([&]() {
-    NvDsObjectMeta obj{};
     while (true) {
-      if (try_pop_rgb(obj)) {
-        Point rgb_center = compute_center(obj);
-        (void)rgb_center; // TODO: feed into tracking/motor control
-      }
-      if (try_pop_mono(obj)) {
-        Point mono_center = compute_center(obj);
-        (void)mono_center; // TODO: feed into tracking/motor control
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      NvDsObjectMeta obj = detection_rgb.pop();
+      Point rgb_center = compute_center(obj);
+      (void)rgb_center; // TODO: feed into tracking/motor control
+    }
+
+
+
+    while (true) {
+      NvDsObjectMeta obj = detection_mono.pop();
+      Point mono_center = compute_center(obj);
+      (void)mono_center; // TODO: feed into tracking/motor control
     }
   });
 
