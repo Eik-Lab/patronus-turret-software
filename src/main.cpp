@@ -39,11 +39,6 @@ int main(int argc, char *argv[]) {
       NvDsObjectMeta obj = detection_rgb.pop();
       Point rgb_center = compute_center(obj);
       (void)rgb_center; // TODO: feed into tracking/motor control
-    }
-
-
-
-    while (true) {
       NvDsObjectMeta obj = detection_mono.pop();
       Point mono_center = compute_center(obj);
       (void)mono_center; // TODO: feed into tracking/motor control
