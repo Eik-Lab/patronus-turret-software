@@ -16,6 +16,7 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
+#include "../../state.hpp"
 
 #define MAX_DISPLAY_LEN 64
 
@@ -38,10 +39,9 @@
     return -1; \
   }
 
-gint frame_number_rgb = 0;
-gchar pgie_classes_str_rgb[1][32] = { "Drone" };
-gfloat drone_bbox_left_rgb = 0, drone_bbox_top_rgb = 0;
-gfloat drone_bbox_width_rgb = 0, drone_bbox_height_rgb = 0;
+gint frame_number_mono = 0;
+gchar pgie_classes_str_mono[1][32] = { "Drone" };
+extern ThreadSafeQueue<NvDsObjectMeta> detection_mono;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -63,31 +63,27 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
-        int offset = 0;
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
+                detection_mono.push(*obj_meta);
                 drone_count++;
-                num_rects++;
-                drone_bbox_left_rgb   = obj_meta->rect_params.left;
-                drone_bbox_top_rgb    = obj_meta->rect_params.top;
-                drone_bbox_width_rgb  = obj_meta->rect_params.width;
-                drone_bbox_height_rgb = obj_meta->rect_params.height;
             }
         }
+        num_rects = frame_meta->num_obj_meta;
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
-        txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
-        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
+        txt_params->display_text = (char*) g_malloc0 (MAX_DISPLAY_LEN);
+        snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
         /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
         txt_params->y_offset = 12;
 
         /* Font , font-color and font-size */
-        txt_params->font_params.font_name = "Serif";
+        txt_params->font_params.font_name = (char*) "Serif";
         txt_params->font_params.font_size = 10;
         txt_params->font_params.font_color.red = 1.0;
         txt_params->font_params.font_color.green = 1.0;
@@ -105,8 +101,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     }
 
     g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            frame_number_rgb, num_rects, drone_count);
-    frame_number_rgb++;
+            frame_number_mono, num_rects, drone_count);
+    frame_number_mono++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -139,7 +135,7 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline_rgb (int argc, char *argv[])
+run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
@@ -179,15 +175,15 @@ run_pipeline_rgb (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("patronus-rgb-pipeline");
+  pipeline = gst_pipeline_new ("patronus-mono-pipeline");
 
   /* Source element for Basler camera via pylonsrc */
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
-  g_object_set (G_OBJECT (source), "device-serial-number", "41882813", NULL);
+  g_object_set (G_OBJECT (source), "device-serial-number", "41882812", NULL);
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=YUY2,width=1920,height=1080");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 

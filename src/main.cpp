@@ -1,38 +1,52 @@
-#include "deepstream/nvdinfer/yolo_inference_rgb.h"
 #include "deepstream/nvdinfer/yolo_inference_mono.h"
-#include <thread>
+#include "deepstream/nvdinfer/yolo_inference_rgb.h"
+#include "state.hpp"
 #include <cstdio>
+#include <thread>
 
-extern "C" {
-    extern float drone_bbox_left_rgb, drone_bbox_top_rgb;
-    extern float drone_bbox_width_rgb, drone_bbox_height_rgb;
-    extern float drone_bbox_left_mono, drone_bbox_top_mono;
-    extern float drone_bbox_width_mono, drone_bbox_height_mono;
+struct Point {
+  float cx;
+  float cy;
+};
+
+ThreadSafeQueue<NvDsObjectMeta> detection_rgb(5);
+ThreadSafeQueue<NvDsObjectMeta> detection_mono(5);
+
+Point compute_center(const NvDsObjectMeta& obj) {
+  float left = obj.rect_params.left;
+  float top = obj.rect_params.top;
+  float width = obj.rect_params.width;
+  float height = obj.rect_params.height;
+  return {left + width / 2.0f, top + height / 2.0f};
 }
 
-int main(int argc, char *argv[])
-{
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <rgb_config> <mono_config>\n", argv[0]);
-        return -1;
+int main(int argc, char *argv[]) {
+  if (argc != 3) {
+    fprintf(stderr, "Usage: %s <rgb_config> <mono_config>\n", argv[0]);
+    return -1;
+  }
+
+  char *rgb_argv[] = {argv[0], argv[1]};
+  char *mono_argv[] = {argv[0], argv[2]};
+
+  std::thread rgb_thread([&]() { run_pipeline_rgb(2, rgb_argv); });
+  std::thread mono_thread([&]() { run_pipeline_mono(2, mono_argv); });
+
+  // TODO: add loop for tracking, choosing detection logic, send to motors.
+  // Later point Kalman filter
+  std::thread tracking([&]() {
+    while (true) {
+      NvDsObjectMeta obj = detection_rgb.pop();
+      Point rgb_center = compute_center(obj);
+      (void)rgb_center; // TODO: feed into tracking/motor control
+      NvDsObjectMeta obj = detection_mono.pop();
+      Point mono_center = compute_center(obj);
+      (void)mono_center; // TODO: feed into tracking/motor control
     }
+  });
 
-    // Build argv for each pipeline: { program_name, config_path }
-    char *rgb_argv[]  = { argv[0], argv[1] };
-    char *mono_argv[] = { argv[0], argv[2] };
-
-    std::thread rgb_thread([&]() {
-        run_pipeline_rgb(2, rgb_argv);
-    });
-    std::thread mono_thread([&](){
-        run_pipeline_mono(2,mono_argv)
-    });
-    //TODO: add loop for tracking, choosing detection logic, send to motors. Later point Kalman filter
-    float cx = drone_bbox_left_rgb + drone_bbox_width_rgb / 2.0f;                                                                                                                                                            
-    float cy = drone_bbox_top_rgb  + drone_bbox_height_rgb / 2.0f;
-
-    float cx = drone_bbox_left_mono + drone_bbox_width_mono / 2.0f;                                                                                                                                                            
-    float cy = drone_bbox_top_mono  + drone_bbox_height_mono / 2.0f;
-    rgb_thread.join();
-    return 0;
+  rgb_thread.join();
+  mono_thread.join();
+  tracking.join();
+  return 0;
 }
