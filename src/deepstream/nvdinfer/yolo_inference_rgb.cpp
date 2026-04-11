@@ -141,8 +141,8 @@ run_pipeline_rgb (int argc, char *argv[])
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
       *nvvidconv_pre = NULL,
-      *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
-      *nvosd = NULL;
+      *streammux = NULL, *udp_sink = NULL, *pgie = NULL, *nvvidconv = NULL,
+      *nvosd = NULL, *encoder = NULL, *payload_encode = NULL;
   GstCaps *caps_src = NULL;
 
   GstBus *bus = NULL;
@@ -213,8 +213,26 @@ run_pipeline_rgb (int argc, char *argv[])
   /* Create OSD to draw on the converted RGBA buffer */
   nvosd = gst_element_factory_make ("nvdsosd", "nv-onscreendisplay");
 
+
+
+    encoder = gst_element_factory_make("x264enc", "encoder");
+  g_object_set(G_OBJECT(encoder),
+    "tune", "zerolatency", 
+    "bitrate", config_.bitrate,
+    "speed-preset", "superfast",  
+    NULL);
+
+  payload_encode = gst_element_factory_make ("rtph264pay", "payload_encode"); 
+
+
+  udp_sink = gst_element_factory_make("udpsink", "udp-sink");
+  g_object_set(G_OBJECT(udp_sink),
+    "host", config_.host,
+    "port", config_.port,
+    NULL); 
+
   /* Finally render the osd output */
-  if(prop.integrated) {
+/*   if(prop.integrated) {
     sink = gst_element_factory_make("nv3dsink", "nv3d-sink");
   } else {
 #ifdef __aarch64__
@@ -222,9 +240,9 @@ run_pipeline_rgb (int argc, char *argv[])
 #else
     sink = gst_element_factory_make ("nveglglessink", "nvvideo-renderer");
 #endif
-  }
+  } */
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
@@ -252,7 +270,7 @@ run_pipeline_rgb (int argc, char *argv[])
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-      nvvidconv, nvosd, sink, NULL);
+      nvvidconv, nvosd, encoder, payload_encode udp_sink, NULL);
   g_print ("Added elements to bin\n");
 
   GstPad *sinkpad, *srcpad;
@@ -289,7 +307,7 @@ run_pipeline_rgb (int argc, char *argv[])
   }
 
   if (!gst_element_link_many (streammux, pgie,
-        nvvidconv, nvosd, sink, NULL)) {
+        nvvidconv, nvosd, encoder, payload_encode, udp_sink, NULL)) {
       g_printerr ("Elements could not be linked: 2. Exiting.\n");
       return -1;
   }
