@@ -100,8 +100,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
 
-    g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            frame_number_mono, num_rects, drone_count);
+    // g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
+            // frame_number_mono, num_rects, drone_count);
     frame_number_mono++;
     return GST_PAD_PROBE_OK;
 }
@@ -224,7 +224,7 @@ run_pipeline_mono (int argc, char *argv[])
 
   udp_sink = gst_element_factory_make("udpsink", "udp-sink");
   g_object_set(G_OBJECT(udp_sink),
-    "host", "127.0.0.1",
+    "host", "123.69.69.23",
     "port", 5000,
     NULL);
 
