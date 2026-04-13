@@ -228,13 +228,15 @@ run_pipeline_rgb (int argc, char *argv[])
   gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
   gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "superfast");
 
-  payload_encode = gst_element_factory_make ("rtph264pay", "payload_encode"); 
-
+  payload_encode = gst_element_factory_make ("rtph264pay", "payload_encode");
+  g_object_set(G_OBJECT(payload_encode), "config-interval", -1, NULL);
 
   udp_sink = gst_element_factory_make("udpsink", "udp-sink");
   g_object_set(G_OBJECT(udp_sink),
-    "host", "123.69.69.23",
+    "host", "123.69.69.53",
     "port", 5001,
+    "sync", FALSE,
+    "async", FALSE,
     NULL);
 
   /* Finally render the osd output */
