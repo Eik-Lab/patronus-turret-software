@@ -140,7 +140,7 @@ run_pipeline_rgb (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
-      *nvvidconv_pre = NULL,
+      *nvvidconv_pre = NULL, *nvvidconv_post = NULL,
       *streammux = NULL, *udp_sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL, *encoder = NULL, *payload_encode = NULL;
   GstCaps *caps_src = NULL;
@@ -215,21 +215,21 @@ run_pipeline_rgb (int argc, char *argv[])
 
 
 
-    encoder = gst_element_factory_make("x264enc", "encoder");
-  g_object_set(G_OBJECT(encoder),
-    "tune", "zerolatency", 
-    "bitrate", config_.bitrate,
-    "speed-preset", "superfast",  
-    NULL);
+  nvvidconv_post = gst_element_factory_make("nvvideoconvert", "nvvideo-converter-post");
+
+  encoder = gst_element_factory_make("x264enc", "encoder");
+  g_object_set(G_OBJECT(encoder), "bitrate", 3000, NULL);
+  gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
+  gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "superfast");
 
   payload_encode = gst_element_factory_make ("rtph264pay", "payload_encode"); 
 
 
   udp_sink = gst_element_factory_make("udpsink", "udp-sink");
   g_object_set(G_OBJECT(udp_sink),
-    "host", config_.host,
-    "port", config_.port,
-    NULL); 
+    "host", "127.0.0.1",
+    "port", 5001,
+    NULL);
 
   /* Finally render the osd output */
 /*   if(prop.integrated) {
@@ -242,7 +242,7 @@ run_pipeline_rgb (int argc, char *argv[])
 #endif
   } */
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !encoder || !payload_encode || !udp_sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
@@ -270,7 +270,7 @@ run_pipeline_rgb (int argc, char *argv[])
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-      nvvidconv, nvosd, encoder, payload_encode udp_sink, NULL);
+      nvvidconv, nvosd, nvvidconv_post, encoder, payload_encode, udp_sink, NULL);
   g_print ("Added elements to bin\n");
 
   GstPad *sinkpad, *srcpad;
@@ -307,7 +307,7 @@ run_pipeline_rgb (int argc, char *argv[])
   }
 
   if (!gst_element_link_many (streammux, pgie,
-        nvvidconv, nvosd, encoder, payload_encode, udp_sink, NULL)) {
+        nvvidconv, nvosd, nvvidconv_post, encoder, payload_encode, udp_sink, NULL)) {
       g_printerr ("Elements could not be linked: 2. Exiting.\n");
       return -1;
   }
