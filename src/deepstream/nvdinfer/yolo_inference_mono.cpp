@@ -139,10 +139,10 @@ run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
-      *nvvidconv_pre = NULL, *nvvidconv_post = NULL,
+      *nvvidconv_pre = NULL, *nvvidconv_post = NULL, *capsfilter_encoder = NULL,
       *streammux = NULL, *udp_sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL, *encoder = NULL, *payload_encode = NULL;
-  GstCaps *caps_src = NULL;
+  GstCaps *caps_src = NULL, *caps_encoder = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -214,6 +214,12 @@ run_pipeline_mono (int argc, char *argv[])
 
   nvvidconv_post = gst_element_factory_make("nvvideoconvert", "nvvideo-converter-post");
 
+  /* Caps filter: I420 for encoder input */
+  capsfilter_encoder = gst_element_factory_make("capsfilter", "caps-encoder");
+  caps_encoder = gst_caps_from_string("video/x-raw,format=I420");
+  g_object_set(G_OBJECT(capsfilter_encoder), "caps", caps_encoder, NULL);
+  gst_caps_unref(caps_encoder);
+
   encoder = gst_element_factory_make("x264enc", "encoder");
   g_object_set(G_OBJECT(encoder), "bitrate", 5000, NULL);
   gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
@@ -239,7 +245,7 @@ run_pipeline_mono (int argc, char *argv[])
 #endif
   } */
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !encoder || !payload_encode || !udp_sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !capsfilter_encoder || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
@@ -267,7 +273,7 @@ run_pipeline_mono (int argc, char *argv[])
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-      nvvidconv, nvosd, nvvidconv_post, encoder, payload_encode, udp_sink, NULL);
+      nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode, udp_sink, NULL);
   g_print ("Added elements to bin\n");
 
   GstPad *sinkpad, *srcpad;
@@ -304,7 +310,7 @@ run_pipeline_mono (int argc, char *argv[])
   }
 
   if (!gst_element_link_many (streammux, pgie,
-        nvvidconv, nvosd, nvvidconv_post, encoder, payload_encode, udp_sink, NULL)) {
+        nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode, udp_sink, NULL)) {
       g_printerr ("Elements could not be linked: 2. Exiting.\n");
       return -1;
   }
