@@ -102,20 +102,20 @@ void loop() {
 
   //Limit movement based on pan or tilt specs
   for (int i = 0; i < numMotors; i++) {
-    // Movement limiter
-    // Tilt maximum range 0-0.5. 0 is straight up and 0.5 straight down
+    feedback_motors[i] = motors[i]->getFeedback(); 
 
+    // Movement limiter
     if (i == 0){ // Sensor Pan
       // If within limit, move freely
-      if (feedback_motors[i].pos > -2.5 && feedback_motors[i].pos < 2.5) {
+      if (feedback_motors[i].pos > -2.9 && feedback_motors[i].pos < -0.1) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 2.5 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= -0.1 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= -2.5 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= -2.9 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
@@ -126,15 +126,15 @@ void loop() {
 
     if (i == 1) { // Sensor Tilt
       // If within limit, move freely
-      if (feedback_motors[i].pos < 0 && feedback_motors[i].pos > -0.40) {
+      if (feedback_motors[i].pos > 0.01 && feedback_motors[i].pos < 0.26) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 0 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= 0.26 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= -0.4 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= 0.01 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
@@ -144,15 +144,15 @@ void loop() {
 
     if (i == 2){ // Shooter Pan
       // If within limit, move freely
-      if (feedback_motors[i].pos > -2.5 && feedback_motors[i].pos < 2.5) {
+      if (feedback_motors[i].pos > -1.10 && feedback_motors[i].pos < -0.1) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 2.5 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= -0.1 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= -2.5 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= -1.10 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
@@ -163,15 +163,15 @@ void loop() {
 
     if (i == 3) { // Shooter Tilt
       // If within limit, move freely
-      if (feedback_motors[i].pos < 0 && feedback_motors[i].pos > -0.40) {
+      if (feedback_motors[i].pos > 0.01 && feedback_motors[i].pos < 0.19) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If above upper limit, only allow negative movement
-      else if (feedback_motors[i].pos >= 0 && positions[i] < 0) {
+      else if (feedback_motors[i].pos >= 0.19 && positions[i] < 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       // If below lower limit, only allow positive movement
-      else if (feedback_motors[i].pos <= -0.4 && positions[i] > 0) {
+      else if (feedback_motors[i].pos <= 0.01 && positions[i] > 0) {
         motors[i]->setVelocity(positions[i]); 
       }
       else {
