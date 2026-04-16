@@ -9,8 +9,8 @@ struct Point {
   float cy;
 };
 
-ThreadSafeQueue<NvDsObjectMeta> detection_rgb(5);
-ThreadSafeQueue<NvDsObjectMeta> detection_mono(5);
+LatestValue<NvDsObjectMeta> detection_rgb;
+LatestValue<NvDsObjectMeta> detection_mono;
 
 Point compute_center(const NvDsObjectMeta& obj) {
   float left = obj.rect_params.left;
@@ -47,6 +47,6 @@ int main(int argc, char *argv[]) {
 
   rgb_thread.join();
   mono_thread.join();
-  tracking.join();
+  // tracking.join();
   return 0;
 }

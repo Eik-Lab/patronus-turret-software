@@ -41,7 +41,7 @@
 
 gint frame_number_mono = 0;
 gchar pgie_classes_str_mono[1][32] = { "Drone" };
-extern ThreadSafeQueue<NvDsObjectMeta> detection_mono;
+extern LatestValue<NvDsObjectMeta> detection_mono;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -183,7 +183,7 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=4096,height=3000");
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 

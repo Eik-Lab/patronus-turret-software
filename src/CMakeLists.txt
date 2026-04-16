@@ -51,6 +51,7 @@ link_directories(
 set(SRCS
     deepstream/nvdinfer/yolo_inference_mono.cpp
     deepstream/nvdinfer/yolo_inference_rgb.cpp
+    deepstream/nvdinfer/
     main.cpp
 )
 
