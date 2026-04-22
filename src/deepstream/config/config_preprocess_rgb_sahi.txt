@@ -1,0 +1,22 @@
+[property]
+target-unique-ids=1
+processing-width=640
+processing-height=640
+scaling-pool-compute-hw=VIC
+scaling-filter=1
+maintain-aspect-ratio=1
+symmetric-padding=1
+tensor-buf-pool-size=6
+tensor-data-type=0
+net-scale-factor=0.0039215697906911373
+tensor-name=input_1
+gpu-id=0
+unique-id=5
+
+## 2x2 tiling of 1920x1088 frame (each tile ~960x544, with 10% overlap)
+## Tiles: top-left, top-right, bottom-left, bottom-right
+[user-configs]
+roi-params-src-0=0;0;1056;600
+roi-params-src-0=864;0;1056;600
+roi-params-src-0=0;488;1056;600
+roi-params-src-0=864;488;1056;600

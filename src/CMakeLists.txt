@@ -61,3 +61,17 @@ target_link_libraries(inference
         -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
         -lcudart -lcuda
         -lpthread)
+
+set(SRCS_SAHI
+    deepstream/nvdinfer/yolo_inference_mono.cpp
+    deepstream/nvdinfer/yolo_inference_rgb_sahi.cpp
+    main_sahi.cpp
+)
+
+add_executable(inference_sahi ${SRCS_SAHI})
+
+target_link_libraries(inference_sahi
+        -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
+        -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
+        -lcudart -lcuda
+        -lpthread)
