@@ -25,7 +25,10 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Usage: %s <rgb_config> <mono_config>\n", argv[0]);
     return -1;
   }
-
+  float x;
+  float y; 
+  int serial_motor = serial_open("");
+  int sensor_motor = serial_open("");
   char *rgb_argv[] = {argv[0], argv[1]};
   char *mono_argv[] = {argv[0], argv[2]};
 
@@ -42,6 +45,9 @@ int main(int argc, char *argv[]) {
       NvDsObjectMeta obj_mono = detection_mono.pop();
       Point mono_center = compute_center(obj_mono);
       (void)mono_center; // TODO: feed into tracking/motor control
+      auto positions = motor_read(fd);
+      // CALCULATIONS
+      motor_send(fd, 0.0f, 0.0f, 0.0f, 0.0f);
     }
   });
 
