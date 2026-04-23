@@ -1,8 +1,8 @@
 [property]
 gpu-id=0
 net-scale-factor=0.0039215697906911373
-model-engine-file=../../../models/yolov8_p2.onnx_b4_gpu0_fp16.engine
-onnx-file=../../../models/yolov8_p2.onnx
+model-engine-file=../../models/yolov8_p2.onnx_b4_gpu0_fp16.engine
+onnx-file=../../models/yolov8_p2.onnx
 labelfile-path=labels.txt
 batch-size=4
 network-mode=2
@@ -13,7 +13,6 @@ cluster-mode=2
 infer-dims=3;640;640
 maintain-aspect-ratio=1
 symmetric-padding=1
-input-tensor-meta=1
 
 ## Custom YOLOv8 bounding box parser
 ## Requires DeepStream-Yolo custom lib: libnvdsinfer_custom_impl_Yolo.so

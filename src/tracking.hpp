@@ -1,5 +1,5 @@
 #include "state.hpp"
-#include <iostream>
+#include <algorithm>
 #include <cmath>
 
 static constexpr float WEAPON_DX = 67.0f;

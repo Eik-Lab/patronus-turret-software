@@ -163,7 +163,9 @@ run_pipeline_rgb (int argc, char *argv[])
 
   /* Standard GStreamer initialization */
   gst_init (&argc, &argv);
-  loop = g_main_loop_new (NULL, FALSE);
+  GMainContext *context = g_main_context_new ();
+  g_main_context_push_thread_default (context);
+  loop = g_main_loop_new (context, FALSE);
 
   /* Parse inference plugin type */
   yaml_config = (g_str_has_suffix (argv[1], ".yml") ||
@@ -320,5 +322,7 @@ run_pipeline_rgb (int argc, char *argv[])
   gst_object_unref (GST_OBJECT (pipeline));
   g_source_remove (bus_watch_id);
   g_main_loop_unref (loop);
+  g_main_context_pop_thread_default (context);
+  g_main_context_unref (context);
   return 0;
 }

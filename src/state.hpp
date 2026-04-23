@@ -5,6 +5,11 @@
 #include <queue>
 #include <condition_variable>
 
+struct Point {
+  float x;
+  float y;
+};
+
 struct DetectionPair {
   NvDsObjectMeta rgb;
   NvDsObjectMeta mono;

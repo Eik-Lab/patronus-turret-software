@@ -155,7 +155,9 @@ int run_pipeline_rgb_sahi(int argc, char *argv[])
   }
 
   gst_init(&argc, &argv);
-  loop = g_main_loop_new(NULL, FALSE);
+  GMainContext *context = g_main_context_new ();
+  g_main_context_push_thread_default (context);
+  loop = g_main_loop_new(context, FALSE);
 
   pipeline = gst_pipeline_new("patronus-rgb-sahi-pipeline");
 
@@ -277,5 +279,7 @@ int run_pipeline_rgb_sahi(int argc, char *argv[])
   gst_object_unref(GST_OBJECT(pipeline));
   g_source_remove(bus_watch_id);
   g_main_loop_unref(loop);
+  g_main_context_pop_thread_default (context);
+  g_main_context_unref (context);
   return 0;
 }

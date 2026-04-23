@@ -1,22 +1,35 @@
 [property]
+enable=1
 target-unique-ids=1
-processing-width=640
-processing-height=640
-scaling-pool-compute-hw=VIC
-scaling-filter=1
+network-input-order=0
+process-on-frame=1
+unique-id=5
+gpu-id=0
 maintain-aspect-ratio=1
 symmetric-padding=1
+processing-width=640
+processing-height=640
+scaling-buf-pool-size=6
 tensor-buf-pool-size=6
+## batch=4 tiles, 3 channels, 640x640
+network-input-shape=4;3;640;640
+network-color-format=0
 tensor-data-type=0
-net-scale-factor=0.0039215697906911373
-tensor-name=input_1
-gpu-id=0
-unique-id=5
+tensor-name=images
+scaling-pool-memory-type=0
+## VIC hardware scaler (optimal on Jetson)
+scaling-pool-compute-hw=2
+scaling-filter=1
+custom-lib-path=/opt/nvidia/deepstream/deepstream/lib/gst-plugins/libcustom2d_preprocess.so
+custom-tensor-preparation-function=CustomTensorPreparation
 
-## 2x2 tiling of 1920x1088 frame (each tile ~960x544, with 10% overlap)
-## Tiles: top-left, top-right, bottom-left, bottom-right
 [user-configs]
-roi-params-src-0=0;0;1056;600
-roi-params-src-0=864;0;1056;600
-roi-params-src-0=0;488;1056;600
-roi-params-src-0=864;488;1056;600
+pixel-normalization-factor=0.003921568
+
+## 2x2 SAHI tiling of 1920x1088 with ~10% overlap
+## Each tile: ~1056x600, left edges at 0 and 864, top edges at 0 and 488
+[group-0]
+src-ids=0
+custom-input-transformation-function=CustomAsyncTransformation
+process-on-roi=1
+roi-params-src-0=0;0;1056;600;864;0;1056;600;0;488;1056;600;864;488;1056;600

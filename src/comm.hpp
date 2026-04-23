@@ -46,7 +46,7 @@ std::array<float, 4> motor_read(int fd){
     int parsed = sscanf(line, "A%fB%fC%fD%f", &positions[0], &positions[1], &positions[2], &positions[3]);
     if (parsed != 4) {
         fprintf(stderr, "motor_read: unknown format '%s'\n", line);
-        return {}
+        return {};
     }
     return positions;
 }

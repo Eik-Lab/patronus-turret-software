@@ -25,13 +25,8 @@
 /* The muxer output resolution must be set if the input streams will be of
  * different resolution. The muxer will scale all the input frames to this
  * resolution. */
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-#define MUXER_OUTPUT_WIDTH 960
-#define MUXER_OUTPUT_HEIGHT 544
-=======
 #define MUXER_OUTPUT_WIDTH 1920
 #define MUXER_OUTPUT_HEIGHT 1088
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
 
 /* Muxer batch formation timeout, for e.g. 40 millisec. Should ideally be set
  * based on the fastest source's framerate. */
@@ -44,14 +39,9 @@
     return -1; \
   }
 
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-gint frame_number = 0;
-gchar pgie_classes_str[1][32] = { "Drone" };
-=======
 gint frame_number_mono = 0;
 gchar pgie_classes_str_mono[1][32] = { "Drone" };
 extern ThreadSafeQueue<NvDsObjectMeta> detection_mono;
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -73,36 +63,20 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-        int offset = 0;
-        num_rects = 0;
-        drone_count = 0;
-=======
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-                drone_count++;
-                num_rects++;
-=======
                 detection_mono.push(*obj_meta);
                 drone_count++;
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
             }
         }
         num_rects = frame_meta->num_obj_meta;
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-        txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
-        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
-=======
         txt_params->display_text = (char*) g_malloc0 (MAX_DISPLAY_LEN);
         snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
 
         /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
@@ -124,17 +98,10 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->text_bg_clr.alpha = 1.0;
 
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
-
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-        g_print ("Frame %d | Quadrant %d | objects=%d drones=%d\n",
-                frame_number, frame_meta->source_id, num_rects, drone_count);
     }
-    frame_number++;
-=======
     g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
             frame_number_mono, num_rects, drone_count);
     frame_number_mono++;
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
     return GST_PAD_PROBE_OK;
 }
 
@@ -171,23 +138,9 @@ run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-      *nvvidconv_pre = NULL, *tee = NULL,
-      *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
-      *nvosd = NULL;
-  GstElement *crop[4];
-  /* left:top:width:height for each quadrant of 1920x1080 */
-  const gchar *crop_rects[4] = {
-      "0:0:960:540",    /* top-left     */
-      "960:0:960:540",  /* top-right    */
-      "0:540:960:540",  /* bottom-left  */
-      "960:540:960:540" /* bottom-right */
-  };
-=======
       *nvvidconv_pre = NULL,
       *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
   GstCaps *caps_src = NULL;
 
   GstBus *bus = NULL;
@@ -208,7 +161,9 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Standard GStreamer initialization */
   gst_init (&argc, &argv);
-  loop = g_main_loop_new (NULL, FALSE);
+  GMainContext *context = g_main_context_new ();
+  g_main_context_push_thread_default (context);
+  loop = g_main_loop_new (context, FALSE);
 
   /* Parse inference plugin type */
   yaml_config = (g_str_has_suffix (argv[1], ".yml") ||
@@ -225,10 +180,7 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Source element for Basler camera via pylonsrc */
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-=======
   g_object_set (G_OBJECT (source), "device-serial-number", "41882812", NULL);
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
@@ -238,24 +190,6 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
   nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-
-  /* Tee to split the frame into 4 quadrant branches */
-  tee = gst_element_factory_make ("tee", "frame-tee");
-
-  /* One nvvideoconvert per quadrant, each crops a different region */
-  for (int i = 0; i < 4; i++) {
-    gchar name[32];
-    g_snprintf (name, sizeof(name), "crop-conv-%d", i);
-    crop[i] = gst_element_factory_make ("nvvideoconvert", name);
-    if (!crop[i]) {
-      g_printerr ("Failed to create crop converter %d. Exiting.\n", i);
-      return -1;
-    }
-    g_object_set (G_OBJECT (crop[i]), "src-crop", crop_rects[i], NULL);
-  }
-=======
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -290,20 +224,12 @@ run_pipeline_mono (int argc, char *argv[])
 #endif
   }
 
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-  if (!source || !capsfilter_src || !nvvidconv_pre || !tee || !pgie || !nvvidconv || !nvosd || !sink) {
-=======
   if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
 
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-  g_object_set (G_OBJECT (streammux), "batch-size", 4, NULL);
-=======
   g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
   g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
       MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
       "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
@@ -324,15 +250,6 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Set up the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-<<<<<<< HEAD:src/deepstream/nvdinfer/yolo_inference.c
-      source, capsfilter_src, nvvidconv_pre, tee,
-      crop[0], crop[1], crop[2], crop[3],
-      streammux, pgie, nvvidconv, nvosd, sink, NULL);
-  g_print ("Added elements to bin\n");
-
-  /* source → capsfilter → nvvidconv_pre → tee */
-  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, tee, NULL)) {
-=======
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
       nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
@@ -366,41 +283,8 @@ run_pipeline_mono (int argc, char *argv[])
    * pgie -> nvvidconv -> nvosd -> video-renderer */
 
   if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
->>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51:src/deepstream/nvdinfer/yolo_inference_mono.cpp
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
-  }
-
-  /* tee → queue → crop[i] → streammux sink_i  for each quadrant */
-  for (int i = 0; i < 4; i++) {
-    gchar queue_name[32], sink_name[16];
-    g_snprintf (queue_name, sizeof(queue_name), "queue-%d", i);
-    GstElement *q = gst_element_factory_make ("queue", queue_name);
-    gst_bin_add (GST_BIN (pipeline), q);
-
-    GstPad *tee_src    = gst_element_request_pad_simple (tee, "src_%u");
-    GstPad *queue_sink = gst_element_get_static_pad (q, "sink");
-    if (gst_pad_link (tee_src, queue_sink) != GST_PAD_LINK_OK) {
-      g_printerr ("Failed to link tee to queue[%d]. Exiting.\n", i);
-      return -1;
-    }
-    gst_object_unref (tee_src);
-    gst_object_unref (queue_sink);
-
-    if (!gst_element_link (q, crop[i])) {
-      g_printerr ("Failed to link queue[%d] to crop. Exiting.\n", i);
-      return -1;
-    }
-
-    g_snprintf (sink_name, sizeof(sink_name), "sink_%d", i);
-    GstPad *mux_sink  = gst_element_request_pad_simple (streammux, sink_name);
-    GstPad *crop_src  = gst_element_get_static_pad (crop[i], "src");
-    if (gst_pad_link (crop_src, mux_sink) != GST_PAD_LINK_OK) {
-      g_printerr ("Failed to link crop[%d] to streammux. Exiting.\n", i);
-      return -1;
-    }
-    gst_object_unref (mux_sink);
-    gst_object_unref (crop_src);
   }
 
   if (!gst_element_link_many (streammux, pgie, nvvidconv, nvosd, sink, NULL)) {
@@ -434,5 +318,7 @@ run_pipeline_mono (int argc, char *argv[])
   gst_object_unref (GST_OBJECT (pipeline));
   g_source_remove (bus_watch_id);
   g_main_loop_unref (loop);
+  g_main_context_pop_thread_default (context);
+  g_main_context_unref (context);
   return 0;
 }
