@@ -16,6 +16,8 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
+#include "../../state.hpp"
+#include <vector>
 
 #define MAX_DISPLAY_LEN 64
 
@@ -24,8 +26,8 @@
 /* The muxer output resolution must be set if the input streams will be of
  * different resolution. The muxer will scale all the input frames to this
  * resolution. */
-#define MUXER_OUTPUT_WIDTH 960
-#define MUXER_OUTPUT_HEIGHT 544
+#define MUXER_OUTPUT_WIDTH 1920
+#define MUXER_OUTPUT_HEIGHT 1088
 
 /* Muxer batch formation timeout, for e.g. 40 millisec. Should ideally be set
  * based on the fastest source's framerate. */
@@ -38,8 +40,9 @@
     return -1; \
   }
 
-gint frame_number = 0;
-gchar pgie_classes_str[1][32] = { "Drone" };
+gint frame_number_rgb = 0;
+gchar pgie_classes_str_rgb[1][32] = { "Drone" };
+extern ThreadSafeQueue<NvDsObjectMeta> detection_rgb;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -61,29 +64,27 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
         NvDsFrameMeta *frame_meta = (NvDsFrameMeta *) (l_frame->data);
-        int offset = 0;
-        num_rects = 0;
-        drone_count = 0;
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
+                detection_rgb.push(*obj_meta);
                 drone_count++;
-                num_rects++;
             }
         }
+        num_rects = frame_meta->num_obj_meta;
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
-        txt_params->display_text = g_malloc0 (MAX_DISPLAY_LEN);
-        offset = snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
+        txt_params->display_text = (char*) g_malloc0 (MAX_DISPLAY_LEN);
+        snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
         /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
         txt_params->y_offset = 12;
 
         /* Font , font-color and font-size */
-        txt_params->font_params.font_name = "Serif";
+        txt_params->font_params.font_name = (char*) "Serif";
         txt_params->font_params.font_size = 10;
         txt_params->font_params.font_color.red = 1.0;
         txt_params->font_params.font_color.green = 1.0;
@@ -98,11 +99,11 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->text_bg_clr.alpha = 1.0;
 
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
-
-        g_print ("Frame %d | Quadrant %d | objects=%d drones=%d\n",
-                frame_number, frame_meta->source_id, num_rects, drone_count);
     }
-    frame_number++;
+
+    g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
+            frame_number_rgb, num_rects, drone_count);
+    frame_number_rgb++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -135,21 +136,13 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline (int argc, char *argv[])
+run_pipeline_rgb (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
-      *nvvidconv_pre = NULL, *tee = NULL,
+      *nvvidconv_pre = NULL,
       *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
       *nvosd = NULL;
-  GstElement *crop[4];
-  /* left:top:width:height for each quadrant of 1920x1080 */
-  const gchar *crop_rects[4] = {
-      "0:0:960:540",    /* top-left     */
-      "960:0:960:540",  /* top-right    */
-      "0:540:960:540",  /* bottom-left  */
-      "960:540:960:540" /* bottom-right */
-  };
   GstCaps *caps_src = NULL;
 
   GstBus *bus = NULL;
@@ -183,34 +176,20 @@ run_pipeline (int argc, char *argv[])
 
   /* Create gstreamer elements */
   /* Create Pipeline element that will form a connection of other elements */
-  pipeline = gst_pipeline_new ("patronus-mono-pipeline");
+  pipeline = gst_pipeline_new ("patronus-rgb-pipeline");
 
   /* Source element for Basler camera via pylonsrc */
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
+  g_object_set (G_OBJECT (source), "device-serial-number", "41882813", NULL);
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=YUY2,width=1920,height=1080");
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 
   /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
   nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
-
-  /* Tee to split the frame into 4 quadrant branches */
-  tee = gst_element_factory_make ("tee", "frame-tee");
-
-  /* One nvvideoconvert per quadrant, each crops a different region */
-  for (int i = 0; i < 4; i++) {
-    gchar name[32];
-    g_snprintf (name, sizeof(name), "crop-conv-%d", i);
-    crop[i] = gst_element_factory_make ("nvvideoconvert", name);
-    if (!crop[i]) {
-      g_printerr ("Failed to create crop converter %d. Exiting.\n", i);
-      return -1;
-    }
-    g_object_set (G_OBJECT (crop[i]), "src-crop", crop_rects[i], NULL);
-  }
 
   /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
@@ -245,12 +224,12 @@ run_pipeline (int argc, char *argv[])
 #endif
   }
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !tee || !pgie || !nvvidconv || !nvosd || !sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
 
-  g_object_set (G_OBJECT (streammux), "batch-size", 4, NULL);
+  g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
   g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
       MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
       "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
@@ -270,53 +249,49 @@ run_pipeline (int argc, char *argv[])
   gst_object_unref (bus);
 
   /* Set up the pipeline */
+  /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
-      source, capsfilter_src, nvvidconv_pre, tee,
-      crop[0], crop[1], crop[2], crop[3],
-      streammux, pgie, nvvidconv, nvosd, sink, NULL);
+      source, capsfilter_src, nvvidconv_pre, streammux, pgie,
+      nvvidconv, nvosd, sink, NULL);
   g_print ("Added elements to bin\n");
 
-  /* source → capsfilter → nvvidconv_pre → tee */
-  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, tee, NULL)) {
+  GstPad *sinkpad, *srcpad;
+  gchar pad_name_sink[16] = "sink_0";
+  gchar pad_name_src[16] = "src";
+
+  sinkpad = gst_element_request_pad_simple (streammux, pad_name_sink);
+  if (!sinkpad) {
+    g_printerr ("Streammux request sink pad failed. Exiting.\n");
+    return -1;
+  }
+
+  srcpad = gst_element_get_static_pad (nvvidconv_pre, pad_name_src);
+  if (!srcpad) {
+    g_printerr ("capsfilter_nvmm request src pad failed. Exiting.\n");
+    return -1;
+  }
+
+  if (gst_pad_link (srcpad, sinkpad) != GST_PAD_LINK_OK) {
+      g_printerr ("Failed to link decoder to stream muxer. Exiting.\n");
+      return -1;
+  }
+
+  gst_object_unref (sinkpad);
+  gst_object_unref (srcpad);
+
+  /* we link the elements together */
+  /* file-source -> h264-parser -> nvh264-decoder ->
+   * pgie -> nvvidconv -> nvosd -> video-renderer */
+
+  if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
   }
 
-  /* tee → queue → crop[i] → streammux sink_i  for each quadrant */
-  for (int i = 0; i < 4; i++) {
-    gchar queue_name[32], sink_name[16];
-    g_snprintf (queue_name, sizeof(queue_name), "queue-%d", i);
-    GstElement *q = gst_element_factory_make ("queue", queue_name);
-    gst_bin_add (GST_BIN (pipeline), q);
-
-    GstPad *tee_src    = gst_element_request_pad_simple (tee, "src_%u");
-    GstPad *queue_sink = gst_element_get_static_pad (q, "sink");
-    if (gst_pad_link (tee_src, queue_sink) != GST_PAD_LINK_OK) {
-      g_printerr ("Failed to link tee to queue[%d]. Exiting.\n", i);
+  if (!gst_element_link_many (streammux, pgie,
+        nvvidconv, nvosd, sink, NULL)) {
+      g_printerr ("Elements could not be linked: 2. Exiting.\n");
       return -1;
-    }
-    gst_object_unref (tee_src);
-    gst_object_unref (queue_sink);
-
-    if (!gst_element_link (q, crop[i])) {
-      g_printerr ("Failed to link queue[%d] to crop. Exiting.\n", i);
-      return -1;
-    }
-
-    g_snprintf (sink_name, sizeof(sink_name), "sink_%d", i);
-    GstPad *mux_sink  = gst_element_request_pad_simple (streammux, sink_name);
-    GstPad *crop_src  = gst_element_get_static_pad (crop[i], "src");
-    if (gst_pad_link (crop_src, mux_sink) != GST_PAD_LINK_OK) {
-      g_printerr ("Failed to link crop[%d] to streammux. Exiting.\n", i);
-      return -1;
-    }
-    gst_object_unref (mux_sink);
-    gst_object_unref (crop_src);
-  }
-
-  if (!gst_element_link_many (streammux, pgie, nvvidconv, nvosd, sink, NULL)) {
-    g_printerr ("Elements could not be linked: 2. Exiting.\n");
-    return -1;
   }
 
   /* Lets add probe to get informed of the meta data generated, we add probe to

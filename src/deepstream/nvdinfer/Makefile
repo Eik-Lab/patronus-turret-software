@@ -15,7 +15,7 @@ ifeq ($(CUDA_VER),)
   $(error "CUDA_VER is not set")
 endif
 
-APP:= deepstream-test1-app
+APP:= inference
 
 TARGET_DEVICE = $(shell gcc -dumpmachine | cut -f1 -d -)
 
@@ -28,17 +28,31 @@ ifeq ($(TARGET_DEVICE),aarch64)
   CFLAGS:= -DPLATFORM_TEGRA
 endif
 
+<<<<<<< HEAD
 SRCS:= $(wildcard *.c)
 SRCS_CPP:= ../../main.cpp
 
+=======
+>>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51
 INCS:= $(wildcard *.h)
 
 PKGS:= gstreamer-1.0
 
+<<<<<<< HEAD
 OBJS:= $(SRCS:.c=.o) $(SRCS_CPP:.cpp=.o)
 
 CFLAGS+= -I/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes \
 		-I /usr/local/cuda-$(CUDA_VER)/include
+=======
+SRCS_CPP:= yolo_inference_mono.cpp yolo_inference_rgb.cpp ../../main.cpp
+
+
+OBJS:= $(SRCS_CPP:.cpp=.o)
+
+CFLAGS+= -I/opt/nvidia/deepstream/deepstream-$(NVDS_VERSION)/sources/includes \
+		-I /usr/local/cuda-$(CUDA_VER)/include \
+		-I../../
+>>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51
 
 CFLAGS+= $(shell pkg-config --cflags $(PKGS))
 
@@ -46,12 +60,12 @@ LIBS:= $(shell pkg-config --libs $(PKGS))
 
 LIBS+= -L/usr/local/cuda-$(CUDA_VER)/lib64/ -lcudart \
 		-L$(LIB_INSTALL_DIR) -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper \
-		-lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) \
+		-lcuda -Wl,-rpath,$(LIB_INSTALL_DIR) -lpthread \
 
 all: $(APP)
 
-%.o: %.c $(INCS) Makefile
-	$(CC) -c -o $@ $(CFLAGS) $<
+%.o: %.cpp $(INCS) Makefile
+	$(CXX) -c -o $@ $(CFLAGS) $<
 
 %.o: %.cpp $(INCS) Makefile
 	$(CXX) -c -o $@ $(CFLAGS) $<

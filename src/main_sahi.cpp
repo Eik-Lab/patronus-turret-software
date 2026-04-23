@@ -1,12 +1,13 @@
+#include "deepstream/nvdinfer/yolo_inference_rgb_sahi.h"
 #include "deepstream/nvdinfer/yolo_inference_mono.h"
-#include "deepstream/nvdinfer/yolo_inference_rgb.h"
 #include "state.hpp"
 #include "tracking.hpp"
 #include "comm.hpp"
 #include <cstdio>
 #include <thread>
 
-struct Point {
+struct Point
+{
   float cx;
   float cy;
 };
@@ -16,7 +17,8 @@ float KP = 0.2;
 ThreadSafeQueue<NvDsObjectMeta> detection_rgb(5);
 ThreadSafeQueue<NvDsObjectMeta> detection_mono(5);
 
-Point compute_center(const NvDsObjectMeta& obj) {
+Point compute_center(const NvDsObjectMeta &obj)
+{
   float left = obj.rect_params.left;
   float top = obj.rect_params.top;
   float width = obj.rect_params.width;
@@ -24,24 +26,29 @@ Point compute_center(const NvDsObjectMeta& obj) {
   return {left + width / 2.0f, top + height / 2.0f};
 }
 
-int main(int argc, char *argv[]) {
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <rgb_config> <mono_config>\n", argv[0]);
-    return -1;
-  }
+int main(int argc, char *argv[])
+{
   int serial_motor = serial_open("");
   int sensor_motor = serial_open("");
   float x;
-  float y; 
-  char *rgb_argv[] = {argv[0], argv[1]};
-  char *mono_argv[] = {argv[0], argv[2]};
+  float y;
 
-  std::thread rgb_thread([&]() { run_pipeline_rgb(2, rgb_argv); });
-  std::thread mono_thread([&]() { run_pipeline_mono(2, mono_argv); });
+  char *rgb_sahi_config = (char *)"deepstream/config/config_infer_primary_rgb_sahi.txt";
+  char *preprocess_config = (char *)"deepstream/config/config_preprocess_rgb_sahi.txt";
+  char *mono_config = (char *)"deepstream/config/config_infer_primary_rgb.txt";
+
+  char *rgb_argv[] = {argv[0], rgb_sahi_config, preprocess_config};
+  char *mono_argv[] = {argv[0], mono_config};
+
+  std::thread rgb_thread([&]()
+                         { run_pipeline_rgb_sahi(3, rgb_argv); });
+  std::thread mono_thread([&]()
+                          { run_pipeline_mono(2, mono_argv); });
 
   // TODO: choosing detection logic, send to motors.
   // Later point Kalman filter, implement in tracking.hpp
-  std::thread tracking([&]() {
+  std::thread tracking([&]()
+                       {
     while (true) {
       NvDsObjectMeta obj = detection_rgb.pop();
       Point rgb_center = compute_center(obj);
@@ -60,9 +67,8 @@ int main(int argc, char *argv[]) {
         auto positions = motor_read(fd); //TODO: compute angle for shooter module
         motor_send(fd, 0.0f, 0.0f, 0.0f, 0.0f);
       }
-      
-    }
-  });
+
+    } });
 
   rgb_thread.join();
   mono_thread.join();

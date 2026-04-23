@@ -22,7 +22,7 @@
 
 .vscode/
 tests/
-
+src/build/
 **/*.mp4
 **/*.h264
 **/*.caffemodel
@@ -33,6 +33,10 @@ tests/
 **/*.o
 **/*.a
 **/*.so
+<<<<<<< HEAD
+=======
+.DS_Store
+>>>>>>> 289d23cf33e362ceb38f80112eb526f827be6a51
 models/
 CaffeMNIST/**/build/
 
