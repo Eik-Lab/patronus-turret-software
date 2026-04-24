@@ -35,6 +35,7 @@ include_directories(
         ${PROJECT_SOURCE_DIR}/deepstream/nvdinfer
         ${PROJECT_SOURCE_DIR}
         ${SRC_INC2}
+        ${SRC_PATH}/sources/gst-plugins/gst-nvdspreprocess/include
         /usr/local/cuda-${CUDA_VER}/include
         /usr/include/gstreamer-1.0
         /usr/include/glib-2.0

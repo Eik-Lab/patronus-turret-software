@@ -13,6 +13,7 @@ cluster-mode=2
 infer-dims=3;640;640
 maintain-aspect-ratio=1
 symmetric-padding=1
+input-tensor-meta=1
 
 ## Custom YOLOv8 bounding box parser
 ## Requires DeepStream-Yolo custom lib: libnvdsinfer_custom_impl_Yolo.so

@@ -18,6 +18,7 @@
 #include "nvds_yml_parser.h"
 #include "../../state.hpp"
 #include <vector>
+#include "nvdspreprocess_meta.h"
 
 #define MAX_DISPLAY_LEN 64
 
@@ -127,6 +128,41 @@ bus_call_sahi(GstBus *bus, GstMessage *msg, gpointer data)
     break;
   }
   return TRUE;
+}
+
+static GstPadProbeReturn
+pgie_sink_pad_probe_sahi(GstPad *pad, GstPadProbeInfo *info, gpointer u_data)
+{
+  static gboolean reported = FALSE;
+  if (reported) return GST_PAD_PROBE_OK;
+
+  GstBuffer *buf = (GstBuffer *)info->data;
+  NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
+  if (!batch_meta) {
+    g_print("[SAHI DIAG] No NvDsBatchMeta on buffer!\n");
+    reported = TRUE;
+    return GST_PAD_PROBE_OK;
+  }
+
+  for (NvDsMetaList *l = batch_meta->batch_user_meta_list; l != NULL; l = l->next) {
+    NvDsUserMeta *user_meta = (NvDsUserMeta *)l->data;
+    if (user_meta->base_meta.meta_type == NVDS_PREPROCESS_BATCH_META) {
+      GstNvDsPreProcessBatchMeta *pp_meta =
+          (GstNvDsPreProcessBatchMeta *)user_meta->user_meta_data;
+      if (pp_meta && pp_meta->tensor_meta)
+        g_print("[SAHI DIAG] preprocess OK: %zu ROIs, tensor '%s', shape[0]=%d\n",
+                pp_meta->roi_vector.size(),
+                pp_meta->tensor_meta->tensor_name.c_str(),
+                pp_meta->tensor_meta->tensor_shape.empty() ? -1 : pp_meta->tensor_meta->tensor_shape[0]);
+      else
+        g_print("[SAHI DIAG] preprocess meta present but tensor_meta is NULL!\n");
+      reported = TRUE;
+      return GST_PAD_PROBE_OK;
+    }
+  }
+  g_print("[SAHI DIAG] NO preprocess meta — nvdspreprocess not producing output!\n");
+  reported = TRUE;
+  return GST_PAD_PROBE_OK;
 }
 
 int run_pipeline_rgb_sahi(int argc, char *argv[])
@@ -266,6 +302,14 @@ int run_pipeline_rgb_sahi(int argc, char *argv[])
     gst_pad_add_probe(osd_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
                       osd_sink_pad_buffer_probe_sahi, NULL, NULL);
   gst_object_unref(osd_sink_pad);
+
+  /* Diagnostic: confirm nvdspreprocess is attaching tensor meta before nvinfer */
+  GstPad *pgie_sink_pad = gst_element_get_static_pad(pgie, "sink");
+  if (pgie_sink_pad) {
+    gst_pad_add_probe(pgie_sink_pad, GST_PAD_PROBE_TYPE_BUFFER,
+                      pgie_sink_pad_probe_sahi, NULL, NULL);
+    gst_object_unref(pgie_sink_pad);
+  }
 
   g_print("Using pylonsrc (Basler camera) with SAHI tiling\n");
   gst_element_set_state(pipeline, GST_STATE_PLAYING);
