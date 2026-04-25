@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
+#include <chrono>
+#include <thread>
 
 static constexpr float WEAPON_DX = 67.0f;
 static constexpr float WEAPON_DY = -34.0f;
@@ -46,16 +49,19 @@ inline AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt)
     float pan_rad = sensor_pan * ((float)M_PI / 180.0f);
     float tilt_rad = sensor_tilt * ((float)M_PI / 180.0f);
 
-    float tx = TARGET_DISTANCE_MM * std::cosf(tilt_rad) * std::cosf(pan_rad);
-    float ty = TARGET_DISTANCE_MM * std::cosf(tilt_rad) * std::sinf(pan_rad);
-    float tz = TARGET_DISTANCE_MM * std::sinf(tilt_rad);
+    float tx = TARGET_DISTANCE_MM * std::cos(tilt_rad) * std::cos(pan_rad);
+    float ty = TARGET_DISTANCE_MM * std::cos(tilt_rad) * std::sin(pan_rad);
+    float tz = TARGET_DISTANCE_MM * std::sin(tilt_rad);
 
     float vx = tx - WEAPON_DX;
     float vy = ty - WEAPON_DY;
     float vz = tz - WEAPON_DZ;
 
-    float pan = std::atan2f(vy, vx) * (180.0f / (float)M_PI);
-    float tilt = std::atan2f(vz, std::sqrtf(vx * vx + vy * vy)) * (180.0f / (float)M_PI);
+    float pan = std::atan2(vy, vx) * (180.0f / (float)M_PI);
+    float tilt = std::atan2(vz, std::sqrt(vx * vx + vy * vy)) * (180.0f / (float)M_PI);
+
+    std::cout << "weapon aim: pan=" << pan << " tilt=" << tilt << "\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     return {.pan = pan, .tilt = tilt};
 }
