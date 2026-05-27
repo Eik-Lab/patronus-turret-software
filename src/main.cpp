@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <thread>
 
+
 LatestValue<NvDsObjectMeta> detection_rgb;
 LatestValue<NvDsObjectMeta> detection_mono;
 
@@ -53,6 +54,6 @@ int main(int argc, char *argv[])
 
   rgb_thread.join();
   mono_thread.join();
-  tracking.join();
+  // tracking.join();
   return 0;
 }
