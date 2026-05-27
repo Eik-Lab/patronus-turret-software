@@ -2,7 +2,7 @@
 
 #include "gstnvdsmeta.h"
 #include <mutex>
-#include <queue>
+#include <optional>
 #include <condition_variable>
 
 struct DetectionPair {
@@ -29,39 +29,28 @@ private:
 };
 
 template <typename T>
-class ThreadSafeQueue {
+class LatestValue {
 private:
-  std::queue<T> q;
+  std::optional<T> slot;
   std::mutex mtx;
-  std::condition_variable cv_not_empty;
-  std::condition_variable cv_not_full;
-  size_t max_size;
+  std::condition_variable cv;
 
 public:
-  explicit ThreadSafeQueue(size_t max_size)
-      : max_size(max_size) {}
-
   void push(T value) {
-    std::unique_lock<std::mutex> lock(mtx);
-
-    cv_not_full.wait(lock, [this]() {
-      return q.size() < max_size;
-    });
-    q.push(std::move(value));
-
-    cv_not_empty.notify_one();
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      slot = std::move(value);
+    }
+    cv.notify_one();
   }
 
   T pop() {
     std::unique_lock<std::mutex> lock(mtx);
-
-    cv_not_empty.wait(lock, [this]() {
-      return !q.empty();
+    cv.wait(lock, [this]() { 
+      return slot.has_value(); 
     });
-    T value = std::move(q.front());
-    q.pop();
-
-    cv_not_full.notify_one();
+    T value = std::move(*slot);
+    slot.reset();
     return value;
   }
 };

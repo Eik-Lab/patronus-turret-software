@@ -9,8 +9,8 @@ struct Point {
   float cy;
 };
 
-ThreadSafeQueue<NvDsObjectMeta> detection_rgb(5);
-ThreadSafeQueue<NvDsObjectMeta> detection_mono(5);
+LatestValue<NvDsObjectMeta> detection_rgb;
+LatestValue<NvDsObjectMeta> detection_mono;
 
 Point compute_center(const NvDsObjectMeta& obj) {
   float left = obj.rect_params.left;
@@ -39,14 +39,14 @@ int main(int argc, char *argv[]) {
       NvDsObjectMeta obj = detection_rgb.pop();
       Point rgb_center = compute_center(obj);
       (void)rgb_center; // TODO: feed into tracking/motor control
-      NvDsObjectMeta obj = detection_mono.pop();
-      Point mono_center = compute_center(obj);
+      NvDsObjectMeta obj_mono = detection_mono.pop();
+      Point mono_center = compute_center(obj_mono);
       (void)mono_center; // TODO: feed into tracking/motor control
     }
   });
 
   rgb_thread.join();
   mono_thread.join();
-  tracking.join();
+  // tracking.join();
   return 0;
 }

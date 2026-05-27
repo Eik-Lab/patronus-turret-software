@@ -41,7 +41,7 @@
 
 gint frame_number_mono = 0;
 gchar pgie_classes_str_mono[1][32] = { "Drone" };
-extern ThreadSafeQueue<NvDsObjectMeta> detection_mono;
+extern LatestValue<NvDsObjectMeta> detection_mono;
 
 /* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
  * and update params for drawing rectangle, object information etc. */
@@ -100,8 +100,8 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
 
-    g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            frame_number_mono, num_rects, drone_count);
+    // g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
+            // frame_number_mono, num_rects, drone_count);
     frame_number_mono++;
     return GST_PAD_PROBE_OK;
 }
@@ -139,10 +139,10 @@ run_pipeline_mono (int argc, char *argv[])
 {
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
-      *nvvidconv_pre = NULL,
-      *streammux = NULL, *sink = NULL, *pgie = NULL, *nvvidconv = NULL,
-      *nvosd = NULL;
-  GstCaps *caps_src = NULL;
+      *nvvidconv_pre = NULL, *nvvidconv_post = NULL, *capsfilter_encoder = NULL,
+      *streammux = NULL, *udp_sink = NULL, *pgie = NULL, *nvvidconv = NULL,
+      *nvosd = NULL, *encoder = NULL, *payload_encode = NULL;
+  GstCaps *caps_src = NULL, *caps_encoder = NULL;
 
   GstBus *bus = NULL;
   guint bus_watch_id;
@@ -183,7 +183,7 @@ run_pipeline_mono (int argc, char *argv[])
 
   /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=1920,height=1080");
+  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=GRAY8,width=4096,height=3000");
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 
@@ -212,8 +212,32 @@ run_pipeline_mono (int argc, char *argv[])
   /* Create OSD to draw on the converted RGBA buffer */
   nvosd = gst_element_factory_make ("nvdsosd", "nv-onscreendisplay");
 
+  nvvidconv_post = gst_element_factory_make("nvvideoconvert", "nvvideo-converter-post");
+
+  /* Caps filter: I420 for encoder input */
+  capsfilter_encoder = gst_element_factory_make("capsfilter", "caps-encoder");
+  caps_encoder = gst_caps_from_string("video/x-raw,format=I420");
+  g_object_set(G_OBJECT(capsfilter_encoder), "caps", caps_encoder, NULL);
+  gst_caps_unref(caps_encoder);
+
+  encoder = gst_element_factory_make("x264enc", "encoder");
+  g_object_set(G_OBJECT(encoder), "bitrate", 5000, NULL);
+  gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
+  gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "superfast");
+
+  payload_encode = gst_element_factory_make ("rtph264pay", "payload_encode");
+  g_object_set(G_OBJECT(payload_encode), "config-interval", -1, NULL);
+
+  udp_sink = gst_element_factory_make("udpsink", "udp-sink");
+  g_object_set(G_OBJECT(udp_sink),
+    "host", "123.69.69.53",
+    "port", 5000,
+    "sync", FALSE,
+    "async", FALSE,
+    NULL);
+
   /* Finally render the osd output */
-  if(prop.integrated) {
+/*   if(prop.integrated) {
     sink = gst_element_factory_make("nv3dsink", "nv3d-sink");
   } else {
 #ifdef __aarch64__
@@ -221,9 +245,9 @@ run_pipeline_mono (int argc, char *argv[])
 #else
     sink = gst_element_factory_make ("nveglglessink", "nvvideo-renderer");
 #endif
-  }
+  } */
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !sink) {
+  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !capsfilter_encoder || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
   }
@@ -251,7 +275,7 @@ run_pipeline_mono (int argc, char *argv[])
   /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-      nvvidconv, nvosd, sink, NULL);
+      nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode, udp_sink, NULL);
   g_print ("Added elements to bin\n");
 
   GstPad *sinkpad, *srcpad;
@@ -288,7 +312,7 @@ run_pipeline_mono (int argc, char *argv[])
   }
 
   if (!gst_element_link_many (streammux, pgie,
-        nvvidconv, nvosd, sink, NULL)) {
+        nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode, udp_sink, NULL)) {
       g_printerr ("Elements could not be linked: 2. Exiting.\n");
       return -1;
   }
