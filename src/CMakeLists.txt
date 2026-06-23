@@ -42,6 +42,20 @@ set(INFERENCE_SOURCES
     comm/serial.cpp
 )
 
+# clang-tidy integration
+# Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
+find_program(CLANG_TIDY NAMES clang-tidy)
+if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF")
+  set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
+    "--extra-arg=-std=c++17"
+    "--extra-arg=-I${PROJECT_SOURCE_DIR}/include"
+    "--warnings-as-errors=*"
+  )
+  message("-- clang-tidy: ${CLANG_TIDY}")
+elseif(NOT CLANG_TIDY)
+  message("-- clang-tidy: NOT FOUND (install via 'apt install clang-tidy' or 'brew install llvm')")
+endif()
+
 add_executable(inference ${INFERENCE_SOURCES})
 
 target_include_directories(inference PRIVATE
