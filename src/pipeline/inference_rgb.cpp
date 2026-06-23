@@ -16,24 +16,18 @@
 #include <cuda_runtime_api.h>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
-#include "../../state.hpp"
+#include "patronus/core/state.hpp"
 #include <vector>
 
 #define MAX_DISPLAY_LEN 64
 
 #define PGIE_CLASS_ID_DRONE 0
 
-/* The muxer output resolution must be set if the input streams will be of
- * different resolution. The muxer will scale all the input frames to this
- * resolution. */
 #define MUXER_OUTPUT_WIDTH 1920
 #define MUXER_OUTPUT_HEIGHT 1088
 
-/* Muxer batch formation timeout, for e.g. 40 millisec. Should ideally be set
- * based on the fastest source's framerate. */
 #define MUXER_BATCH_TIMEOUT_USEC 40000
 
-/* Check for parsing error. */
 #define RETURN_ON_PARSER_ERROR(parse_expr) \
   if (NVDS_YAML_PARSER_SUCCESS != parse_expr) { \
     g_printerr("Error in parsing configuration file.\n"); \
@@ -42,10 +36,7 @@
 
 gint frame_number_rgb = 0;
 gchar pgie_classes_str_rgb[1][32] = { "Drone" };
-extern LatestValue<NvDsObjectMeta> detection_rgb;
-
-/* osd_sink_pad_buffer_probe  will extract metadata received on OSD sink pad
- * and update params for drawing rectangle, object information etc. */
+static LatestValue<NvDsObjectMeta> *g_output_rgb = nullptr;
 
 static GstPadProbeReturn
 osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
@@ -68,7 +59,7 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-                detection_rgb.push(*obj_meta);
+                if (g_output_rgb) g_output_rgb->push(*obj_meta);
                 drone_count++;
             }
         }
@@ -79,11 +70,9 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->display_text = (char*) g_malloc0 (MAX_DISPLAY_LEN);
         snprintf(txt_params->display_text, MAX_DISPLAY_LEN, "Drone = %d ", drone_count);
 
-        /* Now set the offsets where the string should appear */
         txt_params->x_offset = 10;
         txt_params->y_offset = 12;
 
-        /* Font , font-color and font-size */
         txt_params->font_params.font_name = (char*) "Serif";
         txt_params->font_params.font_size = 10;
         txt_params->font_params.font_color.red = 1.0;
@@ -91,7 +80,6 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         txt_params->font_params.font_color.blue = 1.0;
         txt_params->font_params.font_color.alpha = 1.0;
 
-        /* Text background color */
         txt_params->set_bg_clr = 1;
         txt_params->text_bg_clr.red = 0.0;
         txt_params->text_bg_clr.green = 0.0;
@@ -101,8 +89,6 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
 
-    // g_print ("Frame Number = %d Number of objects = %d Drone Count = %d\n",
-            // frame_number_rgb, num_rects, drone_count);
     frame_number_rgb++;
     return GST_PAD_PROBE_OK;
 }
@@ -136,8 +122,10 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline_rgb (int argc, char *argv[])
+run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
 {
+  g_output_rgb = &output;
+
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL,
       *nvvidconv_pre = NULL, *nvvidconv_post = NULL, *capsfilter_encoder = NULL,
@@ -155,17 +143,14 @@ run_pipeline_rgb (int argc, char *argv[])
   cudaGetDevice(&current_device);
   struct cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, current_device);
-  /* Check input arguments */
   if (argc != 2) {
     g_printerr ("Usage: %s <nvinfer config file or yml>\n", argv[0]);
     return -1;
   }
 
-  /* Standard GStreamer initialization */
   gst_init (&argc, &argv);
   loop = g_main_loop_new (NULL, FALSE);
 
-  /* Parse inference plugin type */
   yaml_config = (g_str_has_suffix (argv[1], ".yml") ||
           g_str_has_suffix (argv[1], ".yaml"));
 
@@ -174,24 +159,18 @@ run_pipeline_rgb (int argc, char *argv[])
                 "primary-gie"));
   }
 
-  /* Create gstreamer elements */
-  /* Create Pipeline element that will form a connection of other elements */
   pipeline = gst_pipeline_new ("patronus-rgb-pipeline");
 
-  /* Source element for Basler camera via pylonsrc */
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
   g_object_set (G_OBJECT (source), "device-serial-number", "41882813", NULL);
 
-  /* Caps filter: YUY2 1920x1080 NVMM from pylonsrc */
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
   caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=YUY2,width=4200,height=2160");
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 
-  /* Convert YUY2 NVMM -> NV12 NVMM for streammux (VIC handles YUY2->NV12) */
   nvvidconv_pre = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter-pre");
 
-  /* Create nvstreammux instance to form batches from one or more sources. */
   streammux = gst_element_factory_make ("nvstreammux", "stream-muxer");
 
   if (!pipeline || !streammux) {
@@ -199,25 +178,18 @@ run_pipeline_rgb (int argc, char *argv[])
     return -1;
   }
 
-  /* Use nvinfer or nvinferserver to run inferencing on decoder's output,
-   * behaviour of inferencing is set through config file */
   if (pgie_type == NVDS_GIE_PLUGIN_INFER_SERVER) {
     pgie = gst_element_factory_make ("nvinferserver", "primary-nvinference-engine");
   } else {
     pgie = gst_element_factory_make ("nvinfer", "primary-nvinference-engine");
   }
 
-  /* Use convertor to convert from NV12 to RGBA as required by nvosd */
   nvvidconv = gst_element_factory_make ("nvvideoconvert", "nvvideo-converter");
 
-  /* Create OSD to draw on the converted RGBA buffer */
   nvosd = gst_element_factory_make ("nvdsosd", "nv-onscreendisplay");
-
-
 
   nvvidconv_post = gst_element_factory_make("nvvideoconvert", "nvvideo-converter-post");
 
-  /* Caps filter: I420 for encoder input */
   capsfilter_encoder = gst_element_factory_make("capsfilter", "caps-encoder");
   caps_encoder = gst_caps_from_string("video/x-raw,format=I420");
   g_object_set(G_OBJECT(capsfilter_encoder), "caps", caps_encoder, NULL);
@@ -239,17 +211,6 @@ run_pipeline_rgb (int argc, char *argv[])
     "async", FALSE,
     NULL);
 
-  /* Finally render the osd output */
-/*   if(prop.integrated) {
-    sink = gst_element_factory_make("nv3dsink", "nv3d-sink");
-  } else {
-#ifdef __aarch64__
-    sink = gst_element_factory_make ("nv3dsink", "nvvideo-renderer");
-#else
-    sink = gst_element_factory_make ("nveglglessink", "nvvideo-renderer");
-#endif
-  } */
-
   if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !capsfilter_encoder || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
     return -1;
@@ -263,19 +224,15 @@ run_pipeline_rgb (int argc, char *argv[])
   if (yaml_config) {
     RETURN_ON_PARSER_ERROR(nvds_parse_streammux(streammux, argv[1],"streammux"));
 
-    /* Set all the necessary properties of the inference element */
     RETURN_ON_PARSER_ERROR(nvds_parse_gie(pgie, argv[1], "primary-gie"));
   } else {
     g_object_set (G_OBJECT (pgie), "config-file-path", argv[1], NULL);
   }
 
-  /* we add a message handler */
   bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline));
   bus_watch_id = gst_bus_add_watch (bus, bus_call, loop);
   gst_object_unref (bus);
 
-  /* Set up the pipeline */
-  /* we add all elements into the pipeline */
   gst_bin_add_many (GST_BIN (pipeline),
       source, capsfilter_src, nvvidconv_pre, streammux, pgie,
       nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode, udp_sink, NULL);
@@ -305,10 +262,6 @@ run_pipeline_rgb (int argc, char *argv[])
   gst_object_unref (sinkpad);
   gst_object_unref (srcpad);
 
-  /* we link the elements together */
-  /* file-source -> h264-parser -> nvh264-decoder ->
-   * pgie -> nvvidconv -> nvosd -> video-renderer */
-
   if (!gst_element_link_many (source, capsfilter_src, nvvidconv_pre, NULL)) {
     g_printerr ("Elements could not be linked: 1. Exiting.\n");
     return -1;
@@ -320,9 +273,6 @@ run_pipeline_rgb (int argc, char *argv[])
       return -1;
   }
 
-  /* Lets add probe to get informed of the meta data generated, we add probe to
-   * the sink pad of the osd element, since by that time, the buffer would have
-   * had got all the metadata. */
   osd_sink_pad = gst_element_get_static_pad (nvosd, "sink");
   if (!osd_sink_pad)
     g_print ("Unable to get sink pad\n");
@@ -331,15 +281,12 @@ run_pipeline_rgb (int argc, char *argv[])
         osd_sink_pad_buffer_probe, NULL, NULL);
   gst_object_unref (osd_sink_pad);
 
-  /* Set the pipeline to "playing" state */
   g_print ("Using pylonsrc (Basler camera)\n");
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
 
-  /* Wait till pipeline encounters an error or EOS */
   g_print ("Running...\n");
   g_main_loop_run (loop);
 
-  /* Out of the main loop, clean up nicely */
   g_print ("Returned, stopping playback\n");
   gst_element_set_state (pipeline, GST_STATE_NULL);
   g_print ("Deleting pipeline\n");

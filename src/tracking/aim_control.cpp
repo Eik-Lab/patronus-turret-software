@@ -1,4 +1,4 @@
-#pragma once
+#include "patronus/tracking/aim_control.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,20 +15,7 @@ static constexpr float TARGET_DISTANCE_MM = 100000.0f;
 static constexpr float FRAME_CX = 1920.0f / 2.0f;
 static constexpr float FRAME_CY = 1080.0f / 2.0f;
 
-struct Point
-{
-    float cx;
-    float cy;
-};
-
-struct AimAngles
-{
-    float pan;
-    float tilt;
-};
-
-// TODO: on a later point we will implement a more complex Kalman filter
-inline AimAngles compute_control_sensor(Point center, float Kp)
+AimAngles compute_control_sensor(Point center, float Kp)
 {
     float pan = Kp * (center.cx - FRAME_CX);
     float tilt = Kp * (center.cy - FRAME_CY);
@@ -44,7 +31,7 @@ inline AimAngles compute_control_sensor(Point center, float Kp)
     return {.pan = pan, .tilt = tilt};
 }
 
-inline AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt)
+AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt)
 {
     float pan_rad = sensor_pan * ((float)M_PI / 180.0f);
     float tilt_rad = sensor_tilt * ((float)M_PI / 180.0f);

@@ -1,16 +1,14 @@
-#pragma once
+#include "patronus/comm/serial.hpp"
 
-#include <array>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
-#include <string>
+#include <iostream>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
-#include <iostream>
 
-inline int serial_open(const char *port, int baud_rate = B115200)
+int serial_open(const char *port, int baud_rate)
 {
     int fd = open(port, O_RDWR | O_NOCTTY);
     if (fd < 0)
@@ -43,7 +41,7 @@ inline int serial_open(const char *port, int baud_rate = B115200)
     return fd;
 }
 
-inline float motor_limit(float value)
+static float motor_limit(float value)
 {
     if (value >= 0.0f && value < 0.1f)
         return 0.0f;
@@ -52,7 +50,7 @@ inline float motor_limit(float value)
     return value;
 }
 
-inline void motor_send(int fd, float sensor_pan, float sensor_tilt, float shooter_pan, float shooter_tilt)
+void motor_send(int fd, float sensor_pan, float sensor_tilt, float shooter_pan, float shooter_tilt)
 {
     std::ostringstream cmd;
 
@@ -62,7 +60,7 @@ inline void motor_send(int fd, float sensor_pan, float sensor_tilt, float shoote
     write(fd, out.c_str(), out.size());
 }
 
-inline bool read_line(int fd, std::string &out_line)
+static bool read_line(int fd, std::string &out_line)
 {
     static std::string buffer;
     char temp[64];
@@ -80,7 +78,7 @@ inline bool read_line(int fd, std::string &out_line)
     return false;
 }
 
-inline std::array<float, 4> motor_read(int fd)
+std::array<float, 4> motor_read(int fd)
 {
     std::string line;
     if (!read_line(fd, line))
@@ -98,7 +96,7 @@ inline std::array<float, 4> motor_read(int fd)
     return positions;
 }
 
-inline std::array<float, 2> sensor_read(int fd)
+std::array<float, 2> sensor_read(int fd)
 {
     std::string line;
 

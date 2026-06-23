@@ -1,11 +1,10 @@
-#include "deepstream/nvdinfer/yolo_inference_mono.h"
-#include "deepstream/nvdinfer/yolo_inference_rgb.h"
-#include "comm.hpp"
-#include "tracking.hpp"
-#include "state.hpp"
+#include "patronus/pipeline/inference_mono.hpp"
+#include "patronus/pipeline/inference_rgb.hpp"
+#include "patronus/comm/serial.hpp"
+#include "patronus/tracking/aim_control.hpp"
+#include "patronus/core/state.hpp"
 #include <cstdio>
 #include <thread>
-
 
 LatestValue<NvDsObjectMeta> detection_rgb;
 LatestValue<NvDsObjectMeta> detection_mono;
@@ -33,9 +32,9 @@ int main(int argc, char *argv[])
   char *mono_argv[] = {argv[0], argv[2]};
 
   std::thread rgb_thread([&]()
-                         { run_pipeline_rgb(2, rgb_argv); });
+                         { run_pipeline_rgb(2, rgb_argv, detection_rgb); });
   std::thread mono_thread([&]()
-                          { run_pipeline_mono(2, mono_argv); });
+                          { run_pipeline_mono(2, mono_argv, detection_mono); });
 
   std::thread tracking([&]()
                        {
@@ -54,6 +53,5 @@ int main(int argc, char *argv[])
 
   rgb_thread.join();
   mono_thread.join();
-  // tracking.join();
   return 0;
 }
