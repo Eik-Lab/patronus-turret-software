@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(inference)
 
 execute_process(COMMAND gcc -dumpmachine
@@ -35,6 +35,7 @@ include_directories(
         ${PROJECT_SOURCE_DIR}/deepstream/nvdinfer
         ${PROJECT_SOURCE_DIR}
         ${SRC_INC2}
+        ${PROJECT_SOURCE_DIR}/../libs/CANdle-SDK/candlelib/include
         /usr/local/cuda-${CUDA_VER}/include
         /usr/include/gstreamer-1.0
         /usr/include/glib-2.0
@@ -47,6 +48,12 @@ link_directories(
         /usr/lib/${LINUX_ARCH}-linux-gnu
         /usr/lib/${LINUX_ARCH}-linux-gnu/gstreamer-1.0
 )
+
+set(CANDLESDK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CANDLESDK_BUILD_CANDLETOOL OFF CACHE BOOL "" FORCE)
+set(CANDLE_BUILD_STATIC ON CACHE BOOL "" FORCE)
+
+add_subdirectory(../libs/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
 
 set(SRCS
     deepstream/nvdinfer/yolo_inference_mono.cpp
@@ -61,4 +68,5 @@ target_link_libraries(inference
         -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
         -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
         -lcudart -lcuda
-        -lpthread)
+        -lpthread
+        candle)
