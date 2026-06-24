@@ -1,31 +1,15 @@
 #pragma once
 
-#include "gstnvdsmeta.h"
 #include <mutex>
 #include <optional>
 #include <condition_variable>
 
-struct DetectionPair {
-  NvDsObjectMeta rgb;
-  NvDsObjectMeta mono;
-};
-
-class DetectionState {
-public:
-  void update(const NvDsObjectMeta& rgb, const NvDsObjectMeta& mono) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    detections_.rgb = rgb;
-    detections_.mono = mono;
-  }
-
-  DetectionPair get() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return detections_;
-  }
-
-private:
-  DetectionPair detections_{};
-  mutable std::mutex mutex_;
+/// @brief Lightweight detection result extracted from NvDsObjectMeta.
+///        POD type — safe to copy across threads without dangling pointers.
+struct Detection {
+  float left, top, width, height;
+  int class_id;
+  float confidence;
 };
 
 template <typename T>

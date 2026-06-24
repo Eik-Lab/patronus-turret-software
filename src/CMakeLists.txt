@@ -36,6 +36,7 @@ set(COMMON_LIBS
 
 set(INFERENCE_SOURCES
     main.cpp
+    core/config.cpp
     pipeline/inference_mono.cpp
     pipeline/inference_rgb.cpp
     tracking/aim_control.cpp

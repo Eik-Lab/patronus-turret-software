@@ -13,18 +13,15 @@
 #include <gst/gst.h>
 #include <glib.h>
 #include <stdio.h>
-#include <cuda_runtime_api.h>
+#include <cstdlib>
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"
+#include "patronus/core/config.hpp"
 #include "patronus/core/state.hpp"
-#include <vector>
 
 #define MAX_DISPLAY_LEN 64
 
 #define PGIE_CLASS_ID_DRONE 0
-
-#define MUXER_OUTPUT_WIDTH 1920
-#define MUXER_OUTPUT_HEIGHT 1088
 
 #define MUXER_BATCH_TIMEOUT_USEC 40000
 
@@ -34,16 +31,13 @@
     return -1; \
   }
 
-gint frame_number_rgb = 0;
-gchar pgie_classes_str_rgb[1][32] = { "Drone" };
-static LatestValue<NvDsObjectMeta> *g_output_rgb = nullptr;
+static LatestValue<Detection> *g_output_rgb = nullptr;
 
 static GstPadProbeReturn
 osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
     gpointer u_data)
 {
     GstBuffer *buf = (GstBuffer *) info->data;
-    guint num_rects = 0;
     NvDsObjectMeta *obj_meta = NULL;
     guint drone_count = 0;
     NvDsMetaList * l_frame = NULL;
@@ -59,11 +53,19 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
                 l_obj = l_obj->next) {
             obj_meta = (NvDsObjectMeta *) (l_obj->data);
             if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
-                if (g_output_rgb) g_output_rgb->push(*obj_meta);
+                if (g_output_rgb) {
+                  Detection d;
+                  d.left = obj_meta->rect_params.left;
+                  d.top = obj_meta->rect_params.top;
+                  d.width = obj_meta->rect_params.width;
+                  d.height = obj_meta->rect_params.height;
+                  d.class_id = obj_meta->class_id;
+                  d.confidence = obj_meta->confidence;
+                  g_output_rgb->push(d);
+                }
                 drone_count++;
             }
         }
-        num_rects = frame_meta->num_obj_meta;
         display_meta = nvds_acquire_display_meta_from_pool(batch_meta);
         NvOSD_TextParams *txt_params  = &display_meta->text_params[0];
         display_meta->num_labels = 1;
@@ -89,7 +91,6 @@ osd_sink_pad_buffer_probe (GstPad * pad, GstPadProbeInfo * info,
         nvds_add_display_meta_to_frame(frame_meta, display_meta);
     }
 
-    frame_number_rgb++;
     return GST_PAD_PROBE_OK;
 }
 
@@ -122,7 +123,8 @@ bus_call (GstBus * bus, GstMessage * msg, gpointer data)
 }
 
 int
-run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
+run_pipeline_rgb (const patronus::config::PipelineConfig &config,
+                  LatestValue<Detection> &output)
 {
   g_output_rgb = &output;
 
@@ -139,33 +141,29 @@ run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
   gboolean yaml_config = FALSE;
   NvDsGieType pgie_type = NVDS_GIE_PLUGIN_INFER;
 
-  int current_device = -1;
-  cudaGetDevice(&current_device);
-  struct cudaDeviceProp prop;
-  cudaGetDeviceProperties(&prop, current_device);
-  if (argc != 2) {
-    g_printerr ("Usage: %s <nvinfer config file or yml>\n", argv[0]);
-    return -1;
-  }
-
-  gst_init (&argc, &argv);
   loop = g_main_loop_new (NULL, FALSE);
 
-  yaml_config = (g_str_has_suffix (argv[1], ".yml") ||
-          g_str_has_suffix (argv[1], ".yaml"));
+  // Resolve infer_config to absolute path so DeepStream resolves
+  // model-engine-file / onnx-file relative to the config file's directory.
+  char *infer_config_abs = realpath(config.infer_config.c_str(), NULL);
+
+  yaml_config = infer_config_abs &&
+      (g_str_has_suffix (infer_config_abs, ".yml") ||
+       g_str_has_suffix (infer_config_abs, ".yaml"));
 
   if (yaml_config) {
-    RETURN_ON_PARSER_ERROR(nvds_parse_gie_type(&pgie_type, argv[1],
+    RETURN_ON_PARSER_ERROR(nvds_parse_gie_type(&pgie_type, infer_config_abs,
                 "primary-gie"));
   }
 
   pipeline = gst_pipeline_new ("patronus-rgb-pipeline");
 
   source = gst_element_factory_make ("pylonsrc", "pylon-source");
-  g_object_set (G_OBJECT (source), "device-serial-number", "41882813", NULL);
+  g_object_set (G_OBJECT (source), "device-serial-number",
+      config.camera_serial.c_str(), NULL);
 
   capsfilter_src = gst_element_factory_make ("capsfilter", "caps-src");
-  caps_src = gst_caps_from_string ("video/x-raw(memory:NVMM),format=YUY2,width=4200,height=2160");
+  caps_src = gst_caps_from_string (config.camera_caps.c_str());
   g_object_set (G_OBJECT (capsfilter_src), "caps", caps_src, NULL);
   gst_caps_unref (caps_src);
 
@@ -175,6 +173,7 @@ run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
 
   if (!pipeline || !streammux) {
     g_printerr ("One element could not be created. Exiting.\n");
+    free(infer_config_abs);
     return -1;
   }
 
@@ -196,7 +195,7 @@ run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
   gst_caps_unref(caps_encoder);
 
   encoder = gst_element_factory_make("x264enc", "encoder");
-  g_object_set(G_OBJECT(encoder), "bitrate", 3000, NULL);
+  g_object_set(G_OBJECT(encoder), "bitrate", config.encoder_bitrate, NULL);
   gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
   gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "superfast");
 
@@ -205,29 +204,35 @@ run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
 
   udp_sink = gst_element_factory_make("udpsink", "udp-sink");
   g_object_set(G_OBJECT(udp_sink),
-    "host", "123.69.69.53",
-    "port", 5001,
+    "host", config.udp_host.c_str(),
+    "port", config.udp_port,
     "sync", FALSE,
     "async", FALSE,
     NULL);
 
   if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd || !nvvidconv_post || !capsfilter_encoder || !encoder || !payload_encode || !udp_sink) {
     g_printerr ("One element could not be created. Exiting.\n");
+    free(infer_config_abs);
     return -1;
   }
 
   g_object_set (G_OBJECT (streammux), "batch-size", 1, NULL);
-  g_object_set (G_OBJECT (streammux), "width", MUXER_OUTPUT_WIDTH, "height",
-      MUXER_OUTPUT_HEIGHT, "live-source", TRUE,
+  g_object_set (G_OBJECT (streammux), "width", config.muxer_width, "height",
+      config.muxer_height, "live-source", TRUE,
       "batched-push-timeout", MUXER_BATCH_TIMEOUT_USEC, NULL);
 
-  if (yaml_config) {
-    RETURN_ON_PARSER_ERROR(nvds_parse_streammux(streammux, argv[1],"streammux"));
-
-    RETURN_ON_PARSER_ERROR(nvds_parse_gie(pgie, argv[1], "primary-gie"));
+  if (yaml_config && infer_config_abs) {
+    RETURN_ON_PARSER_ERROR(nvds_parse_streammux(streammux, infer_config_abs,
+                           "streammux"));
+    RETURN_ON_PARSER_ERROR(nvds_parse_gie(pgie, infer_config_abs,
+                           "primary-gie"));
+  } else if (infer_config_abs) {
+    g_object_set (G_OBJECT (pgie), "config-file-path", infer_config_abs, NULL);
   } else {
-    g_object_set (G_OBJECT (pgie), "config-file-path", argv[1], NULL);
+    g_object_set (G_OBJECT (pgie), "config-file-path",
+                  config.infer_config.c_str(), NULL);
   }
+  free(infer_config_abs);
 
   bus = gst_pipeline_get_bus (GST_PIPELINE (pipeline));
   bus_watch_id = gst_bus_add_watch (bus, bus_call, loop);
@@ -281,7 +286,8 @@ run_pipeline_rgb (int argc, char *argv[], LatestValue<NvDsObjectMeta> &output)
         osd_sink_pad_buffer_probe, NULL, NULL);
   gst_object_unref (osd_sink_pad);
 
-  g_print ("Using pylonsrc (Basler camera)\n");
+  g_print ("Using pylonsrc (Basler camera serial %s)\n",
+           config.camera_serial.c_str());
   gst_element_set_state (pipeline, GST_STATE_PLAYING);
 
   g_print ("Running...\n");
