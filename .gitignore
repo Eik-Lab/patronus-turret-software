@@ -48,4 +48,5 @@ senet/**/build/
 anomaly/**/build/
 
 src/deepstream/DeepStream-Yolo/
+build/
 
