@@ -75,9 +75,9 @@ Each of these files contains the following notice:
 
 ## 3. CANdle-SDK (MAB Robotics / third party)
 
-The CANdle-SDK library under libs/CANdle-SDK/ is a third-party dependency.
+The CANdle-SDK library under deps/CANdle-SDK/ is a third-party dependency.
 Its candlelib component is licensed under the GNU Lesser General Public License
 v3.0 (LGPL-3.0). Other components may use the MIT License.
 
-See libs/CANdle-SDK/LICENSE.txt and libs/CANdle-SDK/candlelib/LICENSE for
+See deps/CANdle-SDK/LICENSE.txt and deps/CANdle-SDK/candlelib/LICENSE for
 the full license terms.

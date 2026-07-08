@@ -33,6 +33,7 @@ src/build/
 **/*.o
 **/*.a
 **/*.so
+!deps/deepstream/libnvdsinfer_custom_impl_Yolo.so
 .DS_Store
 models/
 CaffeMNIST/**/build/

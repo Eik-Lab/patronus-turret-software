@@ -17,7 +17,7 @@ symmetric-padding=1
 ## Custom YOLOv8 bounding box parser
 ## Requires DeepStream-Yolo custom lib: libnvdsinfer_custom_impl_Yolo.so
 ## See: https://github.com/marcoslucianops/DeepStream-Yolo
-custom-lib-path=../../libs/deepstream/libnvdsinfer_custom_impl_Yolo.so
+custom-lib-path=../../deps/deepstream/libnvdsinfer_custom_impl_Yolo.so
 parse-bbox-func-name=NvDsInferParseYolo
 output-blob-names=output0
 

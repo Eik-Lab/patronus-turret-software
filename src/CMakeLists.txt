@@ -42,7 +42,7 @@ else()
   endif()
 endif()
 
-add_subdirectory(../libs/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
+add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
 
 set(COMMON_LIBS
     -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper

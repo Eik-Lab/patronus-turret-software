@@ -11,7 +11,7 @@ These are runtime configuration files for the DeepStream inference pipelines.
 The custom YOLOv8 bounding box parser (`libnvdsinfer_custom_impl_Yolo.so`) should be placed at:
 
 ```
-libs/deepstream/libnvdsinfer_custom_impl_Yolo.so
+deps/deepstream/libnvdsinfer_custom_impl_Yolo.so
 ```
 
 ```bash

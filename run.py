@@ -65,9 +65,9 @@ def check_model_files():
 
 def check_custom_lib():
     """Ensure the custom YOLOv8 bbox parser .so exists."""
-    path = os.path.join(PROJECT_ROOT, "libs/deepstream/libnvdsinfer_custom_impl_Yolo.so")
+    path = os.path.join(PROJECT_ROOT, "deps/deepstream/libnvdsinfer_custom_impl_Yolo.so")
     if not os.path.isfile(path):
-        return [f"  Custom YOLO bbox parser: libs/deepstream/libnvdsinfer_custom_impl_Yolo.so"]
+        return [f"  Custom YOLO bbox parser: deps/deepstream/libnvdsinfer_custom_impl_Yolo.so"]
     return []
 
 
