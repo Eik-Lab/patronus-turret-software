@@ -1,0 +1,3 @@
+[submodule "deps/CANdle-SDK"]
+	path = deps/CANdle-SDK
+	url = https://codeberg.org/fatum/CANdle-SDK-CPP17.git

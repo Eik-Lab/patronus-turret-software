@@ -57,6 +57,9 @@ set(SRCS
 
 add_executable(inference ${SRCS})
 
+add_subdirectory(deps/CANdle-SDK)
+target_link_libraries(inference PRIVATE candle)
+
 target_link_libraries(inference
         -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
         -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
