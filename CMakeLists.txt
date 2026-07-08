@@ -4,6 +4,8 @@ project(patronus-turret VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # NVIDIA Jetson AGX Thor (Blackwell, sm_11.0)
 # Use 'native' for auto-detection, or set explicitly for cross-compilation:
 #   -DCMAKE_CUDA_ARCHITECTURES=110

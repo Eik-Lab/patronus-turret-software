@@ -225,7 +225,10 @@ def ensure_built(dry_run, args):
         return
 
     config_marker = os.path.join(BUILD_DIR, "CMakeCache.txt")
-    needs_configure = not os.path.isdir(BUILD_DIR) or not os.path.isfile(config_marker)
+    build_file = os.path.join(BUILD_DIR, "Makefile")
+    if not os.path.isfile(build_file):
+        build_file = os.path.join(BUILD_DIR, "build.ninja")
+    needs_configure = not os.path.isdir(BUILD_DIR) or not os.path.isfile(config_marker) or not os.path.isfile(build_file)
 
     if needs_configure:
         print("Configuring CMake...")

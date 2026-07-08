@@ -24,6 +24,24 @@ set(CANDLESDK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CANDLESDK_BUILD_CANDLETOOL OFF CACHE BOOL "" FORCE)
 set(CANDLE_BUILD_STATIC ON CACHE BOOL "" FORCE)
 
+# clang-tidy integration
+# Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
+find_program(CLANG_TIDY NAMES clang-tidy)
+if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF")
+  set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
+    "--extra-arg=-std=c++17"
+    "--extra-arg=-I${PROJECT_SOURCE_DIR}/include"
+    "--warnings-as-errors=*"
+  )
+  message("-- clang-tidy: ${CLANG_TIDY}")
+else()
+  unset(CMAKE_CXX_CLANG_TIDY CACHE)
+  set(CMAKE_CXX_CLANG_TIDY "")
+  if(NOT CLANG_TIDY)
+    message("-- clang-tidy: NOT FOUND (install via 'apt install clang-tidy' or 'brew install llvm')")
+  endif()
+endif()
+
 add_subdirectory(../libs/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
 
 set(COMMON_LIBS
@@ -42,20 +60,6 @@ set(INFERENCE_SOURCES
     tracking/aim_control.cpp
     comm/serial.cpp
 )
-
-# clang-tidy integration
-# Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
-find_program(CLANG_TIDY NAMES clang-tidy)
-if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF")
-  set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
-    "--extra-arg=-std=c++17"
-    "--extra-arg=-I${PROJECT_SOURCE_DIR}/include"
-    "--warnings-as-errors=*"
-  )
-  message("-- clang-tidy: ${CLANG_TIDY}")
-elseif(NOT CLANG_TIDY)
-  message("-- clang-tidy: NOT FOUND (install via 'apt install clang-tidy' or 'brew install llvm')")
-endif()
 
 add_executable(inference ${INFERENCE_SOURCES})
 
