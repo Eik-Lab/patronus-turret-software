@@ -18,12 +18,22 @@ struct PipelineConfig {
   bool enabled{true};
 };
 
+/// @brief CAN bus configuration.
+struct CanConfig {
+  uint16_t pan_node_id{16};
+  uint16_t tilt_node_id{18};
+  uint8_t  datarate{1};               ///< 1, 2, 5, or 8 Mbps
+  float    max_velocity_rad_s{6.28f}; ///< Maximum velocity command.
+  uint16_t pds_node_id{100};          ///< PDS module CAN ID (0 to skip).
+};
+
 /// @brief Top-level system configuration.
 struct SystemConfig {
   std::string mode{"both"};
   bool tracking{false};
   PipelineConfig rgb;
   PipelineConfig mono;
+  CanConfig can;
 };
 
 /// @brief Load system configuration from a GLib-format .ini file.

@@ -35,4 +35,15 @@ public:
     slot.reset();
     return value;
   }
+
+  /// @brief Wait up to `timeout` for a value; returns empty optional if none arrives.
+  template <typename Rep, typename Period>
+  std::optional<T> try_pop(const std::chrono::duration<Rep, Period>& timeout) {
+    std::unique_lock<std::mutex> lock(mtx);
+    if (!cv.wait_for(lock, timeout, [this]() { return slot.has_value(); }))
+      return std::nullopt;
+    T value = std::move(*slot);
+    slot.reset();
+    return value;
+  }
 };

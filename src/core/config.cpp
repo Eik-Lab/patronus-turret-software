@@ -93,6 +93,18 @@ SystemConfig load_config(const std::string &path)
   if (g_key_file_has_group(kf, "mono"))
     sys.mono = read_pipeline(kf, "mono");
 
+  // [can]
+  if (g_key_file_has_group(kf, "can")) {
+    sys.can.pan_node_id      = read_uint16(kf, "can", "pan_node_id", 16);
+    sys.can.tilt_node_id     = read_uint16(kf, "can", "tilt_node_id", 18);
+    sys.can.datarate         = static_cast<uint8_t>(read_uint16(kf, "can", "datarate", 1));
+    sys.can.max_velocity_rad_s =
+        static_cast<float>(g_key_file_get_double(kf, "can", "max_velocity_rad_s", nullptr));
+    if (sys.can.max_velocity_rad_s <= 0.0f)
+      sys.can.max_velocity_rad_s = 6.28f;
+    sys.can.pds_node_id      = read_uint16(kf, "can", "pds_node_id", 100);
+  }
+
   g_key_file_free(kf);
   return sys;
 }
