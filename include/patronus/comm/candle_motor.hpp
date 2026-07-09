@@ -57,6 +57,10 @@ class CandleMotor {
  private:
   bool enable_pds();
 
+  /// @brief Resolve pan/tilt CAN IDs — try configured IDs first, then discover.
+  /// @return Two IDs on success; empty vector on failure.
+  std::vector<uint16_t> try_resolve_motor_ids();
+
   CandleConfig                        cfg_;
   mab::Candle*                        candle_{nullptr};
   std::unique_ptr<mab::MD>            pan_motor_;

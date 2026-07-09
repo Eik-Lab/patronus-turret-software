@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 namespace patronus::comm {
@@ -76,8 +77,13 @@ bool CandleMotor::enable_pds()
 
 bool CandleMotor::init()
 {
-  candle_ = mab::attachCandle(to_datarate(cfg_.datarate),
-                              mab::candleTypes::busTypes_t::USB);
+  try {
+    candle_ = mab::attachCandle(to_datarate(cfg_.datarate),
+                                mab::candleTypes::busTypes_t::USB);
+  } catch (const std::runtime_error& e) {
+    std::fprintf(stderr, "CandleMotor: failed to attach CANdle device — %s\n", e.what());
+    return false;
+  }
   if (!candle_) {
     std::fprintf(stderr, "CandleMotor: failed to attach CANdle device\n");
     return false;
@@ -90,8 +96,15 @@ bool CandleMotor::init()
     return false;
   }
 
-  pan_motor_  = std::make_unique<mab::MD>(cfg_.pan_node_id, candle_);
-  tilt_motor_ = std::make_unique<mab::MD>(cfg_.tilt_node_id, candle_);
+  // Try the configured IDs first; fall back to bus discovery
+  auto ids = try_resolve_motor_ids();
+  if (ids.empty()) {
+    disable();
+    return false;
+  }
+
+  pan_motor_  = std::make_unique<mab::MD>(ids[0], candle_);
+  tilt_motor_ = std::make_unique<mab::MD>(ids[1], candle_);
 
   for (auto* md : {pan_motor_.get(), tilt_motor_.get()}) {
     if (md->init() != mab::MD::Error_t::OK) {
@@ -107,6 +120,38 @@ bool CandleMotor::init()
   }
 
   return true;
+}
+
+std::vector<uint16_t> CandleMotor::try_resolve_motor_ids()
+{
+  // 1) Try the configured IDs
+  auto test_md = [&](uint16_t id) {
+    mab::MD md(id, candle_);
+    return md.init() == mab::MD::Error_t::OK;
+  };
+
+  if (test_md(cfg_.pan_node_id) && test_md(cfg_.tilt_node_id)) {
+    std::printf("CandleMotor: using configured IDs pan=%u tilt=%u\n",
+                cfg_.pan_node_id, cfg_.tilt_node_id);
+    return {cfg_.pan_node_id, cfg_.tilt_node_id};
+  }
+
+  // 2) Bus discovery
+  std::printf("CandleMotor: configured IDs unreachable — scanning CAN bus...\n");
+  auto discovered = mab::MD::discoverMDs(candle_);
+
+  if (discovered.size() < 2) {
+    std::fprintf(stderr, "CandleMotor: found %zu MD(s) on bus — need at least 2\n",
+                 discovered.size());
+    for (auto id : discovered)
+      std::fprintf(stderr, "  — MD%u\n", id);
+    return {};
+  }
+
+  // Take the first two discovered IDs as pan / tilt
+  std::printf("CandleMotor: discovered %zu MDs — using IDs %u and %u\n",
+              discovered.size(), discovered[0], discovered[1]);
+  return {discovered[0], discovered[1]};
 }
 
 std::pair<float, float> CandleMotor::get_velocity()
