@@ -1,5 +1,6 @@
 #pragma once
 
+#include "patronus/core/config.hpp"
 #include "patronus/core/types.hpp"
 #include <cstdint>
 #include <memory>
@@ -15,57 +16,94 @@ class PowerStage;
 
 namespace patronus::comm {
 
-/// @brief Configuration parameters for the CANdle motor driver.
-struct CandleConfig {
-  uint16_t pan_node_id{16};
-  uint16_t tilt_node_id{18};
-  uint8_t  datarate{1};               ///< 1, 2, 5, or 8 Mbps
-  float    max_velocity_rad_s{6.28f}; ///< Maximum velocity command (~1 rev/s)
-  uint16_t pds_node_id{100};          ///< PDS module CAN ID (0 to skip PDS init)
-};
-
 /// @brief CANdle-based motor driver for pan/tilt gimbal control.
 ///
-/// Wraps the CANdle-SDK's mab::Candle (USB-to-CAN adapter) and two mab::MD
-/// (motor controller) instances.  Operates in VELOCITY_PID mode.
+/// Wraps the CANdle-SDK's mab::Candle (USB-to-CAN adapter) and two or more
+/// mab::MD (motor controller) instances.  Operates in VELOCITY_PID mode.
+/// Supports multiple gimbals on a single CAN bus.
 class CandleMotor {
  public:
-  explicit CandleMotor(const CandleConfig& cfg);
+  using GimbalCfg  = config::GimbalConfig;
+  using BusCfg     = config::CanBusConfig;
+
+  /// @brief Construct for a single gimbal (backward-compatible).
+  explicit CandleMotor(const GimbalCfg& gimbal,
+                       const BusCfg& bus = BusCfg{});
+
+  /// @brief Construct for multiple gimbals on one CANdle bus.
+  explicit CandleMotor(const std::vector<GimbalCfg>& gimbals,
+                       const BusCfg& bus = BusCfg{});
+
   ~CandleMotor();
 
   CandleMotor(const CandleMotor&) = delete;
   CandleMotor& operator=(const CandleMotor&) = delete;
 
-  /// @brief Open CANdle device and initialise both motors.
+  /// @brief Open CANdle device and initialise all gimbal motors.
   /// @return true on success.
   [[nodiscard]] bool init();
 
-  /// @brief Set pan/tilt velocity commands in radians per second.
-  void set_velocity(float pan_rad_s, float tilt_rad_s);
+  /// @brief Number of gimbals managed by this instance.
+  [[nodiscard]] size_t gimbal_count() const { return gimbals_.size(); }
 
-  /// @brief Read back actual motor velocities.
+  // ── Per-gimbal API ────────────────────────────────────────────────────
+
+  /// @brief Set pan/tilt velocity for a specific gimbal (rad/s).
+  void set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
+
+  /// @brief Read back actual motor velocities for a specific gimbal.
   /// @return Pair of (pan_rad_s, tilt_rad_s).
-  std::pair<float, float> get_velocity();
+  std::pair<float, float> get_velocity(size_t gimbal);
 
-  /// @brief Read back actual motor positions.
+  /// @brief Read back actual motor positions for a specific gimbal.
   /// @return Pair of (pan_rad, tilt_rad).
-  std::pair<float, float> get_position();
+  std::pair<float, float> get_position(size_t gimbal);
 
-  /// @brief Disable PWM output on both motors and detach the CANdle device.
+  /// @brief Zero the encoder at the current position for a specific gimbal.
+  /// @return true on success.
+  [[nodiscard]] bool calibrate_home(size_t gimbal);
+
+  /// @brief Drive a specific gimbal toward home using velocity-mode P-control.
+  bool return_to_home(size_t gimbal, float position_gain,
+                      float tolerance_rad,
+                      float max_velocity_rad_s = 0.0F);
+
+  /// @brief Check whether a specific gimbal is within tolerance of home.
+  [[nodiscard]] bool is_at_home(size_t gimbal, float tolerance_rad);
+
+  /// @brief Access raw pan MD for a specific gimbal (diagnostic use).
+  mab::MD* pan_motor(size_t gimbal);
+
+  /// @brief Access raw tilt MD for a specific gimbal (diagnostic use).
+  mab::MD* tilt_motor(size_t gimbal);
+
+  // ── Legacy single-gimbal API (operates on gimbal 0) ───────────────────
+
+  void set_velocity(float pan_rad_s, float tilt_rad_s);
+  std::pair<float, float> get_velocity();
+  std::pair<float, float> get_position();
+  [[nodiscard]] bool calibrate_home();
+  bool return_to_home(float position_gain, float tolerance_rad,
+                      float max_velocity_rad_s = 0.0F);
+  [[nodiscard]] bool is_at_home(float tolerance_rad);
+  mab::MD* pan_motor();
+  mab::MD* tilt_motor();
+
+  /// @brief Disable PWM output on all motors and detach the CANdle device.
   void disable();
 
  private:
   bool enable_pds();
-
-  /// @brief Resolve pan/tilt CAN IDs — try configured IDs first, then discover.
-  /// @return Two IDs on success; empty vector on failure.
+  // Discover MDs on bus and verify all configured CAN IDs are present
   std::vector<uint16_t> try_resolve_motor_ids();
 
-  CandleConfig                        cfg_;
-  mab::Candle*                        candle_{nullptr};
-  std::unique_ptr<mab::MD>            pan_motor_;
-  std::unique_ptr<mab::MD>            tilt_motor_;
-  std::unique_ptr<mab::Pds>           pds_;
+  BusCfg                                        bus_cfg_;
+  std::vector<GimbalCfg>                        gimbals_;
+  mab::Candle*                                  candle_{nullptr};
+  std::vector<std::unique_ptr<mab::MD>>         pan_motors_;
+  std::vector<std::unique_ptr<mab::MD>>         tilt_motors_;
+  std::vector<float>                            tilt_gear_ratios_;
+  std::unique_ptr<mab::Pds>                     pds_;
   std::vector<std::shared_ptr<mab::PowerStage>> power_stages_;
 };
 

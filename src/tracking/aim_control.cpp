@@ -23,9 +23,9 @@ AimAngles compute_control_sensor(Point center, float Kp)
     pan = std::clamp(pan, -1.0f, 1.0f);
     tilt = std::clamp(tilt, -1.0f, 1.0f);
 
-    if (std::abs(pan) < 0.02f)
+    if (std::abs(pan) < 0.01f)
         pan = 0.0f;
-    if (std::abs(tilt) < 0.02f)
+    if (std::abs(tilt) < 0.01f)
         tilt = 0.0f;
 
     return {.pan = pan, .tilt = tilt};

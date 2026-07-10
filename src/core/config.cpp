@@ -51,6 +51,18 @@ static bool read_bool(GKeyFile *kf, const gchar *group,
   return !!val;
 }
 
+static float read_float(GKeyFile *kf, const gchar *group,
+                          const gchar *key, float fallback)
+{
+  GError *err = nullptr;
+  double val = g_key_file_get_double(kf, group, key, &err);
+  if (err) {
+    g_clear_error(&err);
+    return fallback;
+  }
+  return static_cast<float>(val);
+}
+
 static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group)
 {
   PipelineConfig cfg;
@@ -64,6 +76,41 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group)
   cfg.muxer_width = read_uint32(kf, group, "muxer_width", 1920);
   cfg.muxer_height = read_uint32(kf, group, "muxer_height", 1088);
   cfg.enabled = read_bool(kf, group, "enabled", true);
+  return cfg;
+}
+
+static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group,
+                                 uint16_t fallback_pan,
+                                 uint16_t fallback_tilt)
+{
+  GimbalConfig cfg;
+  cfg.pan_node_id      = read_uint16(kf, group, "pan_node_id", fallback_pan);
+  cfg.tilt_node_id     = read_uint16(kf, group, "tilt_node_id", fallback_tilt);
+  cfg.max_velocity_rad_s = read_float(kf, group, "max_velocity_rad_s", 6.28f);
+  if (cfg.max_velocity_rad_s <= 0.0f)
+    cfg.max_velocity_rad_s = 6.28f;
+  cfg.tilt_max_rad     = read_float(kf, group, "tilt_max_rad", 0.611f);
+  if (cfg.tilt_max_rad <= 0.0f)
+    cfg.tilt_max_rad = 0.611f;
+  return cfg;
+}
+
+static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group)
+{
+  TrackingConfig cfg;
+  cfg.home_return_enabled  = read_bool(kf, group, "home_return_enabled", true);
+  cfg.home_return_gain     = read_float(kf, group, "home_return_gain", 2.0f);
+  if (cfg.home_return_gain <= 0.0f)
+    cfg.home_return_gain = 2.0f;
+  cfg.home_tolerance_rad   = read_float(kf, group, "home_tolerance_rad", 0.05f);
+  if (cfg.home_tolerance_rad <= 0.0f)
+    cfg.home_tolerance_rad = 0.05f;
+  cfg.home_return_delay_ms = static_cast<int>(
+      read_uint16(kf, group, "home_return_delay_ms", 500));
+  cfg.home_return_max_velocity = read_float(kf, group,
+      "home_return_max_velocity", 1.5f);
+  if (cfg.home_return_max_velocity <= 0.0f)
+    cfg.home_return_max_velocity = 1.5f;
   return cfg;
 }
 
@@ -93,16 +140,49 @@ SystemConfig load_config(const std::string &path)
   if (g_key_file_has_group(kf, "mono"))
     sys.mono = read_pipeline(kf, "mono");
 
-  // [can]
+  // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {
-    sys.can.pan_node_id      = read_uint16(kf, "can", "pan_node_id", 16);
-    sys.can.tilt_node_id     = read_uint16(kf, "can", "tilt_node_id", 18);
-    sys.can.datarate         = static_cast<uint8_t>(read_uint16(kf, "can", "datarate", 1));
-    sys.can.max_velocity_rad_s =
-        static_cast<float>(g_key_file_get_double(kf, "can", "max_velocity_rad_s", nullptr));
-    if (sys.can.max_velocity_rad_s <= 0.0f)
-      sys.can.max_velocity_rad_s = 6.28f;
-    sys.can.pds_node_id      = read_uint16(kf, "can", "pds_node_id", 100);
+    sys.can_bus.datarate    = static_cast<uint8_t>(
+        read_uint16(kf, "can", "datarate", 1));
+    sys.can_bus.pds_node_id = read_uint16(kf, "can", "pds_node_id", 100);
+  }
+
+  // Per-gimbal configs: try [can_1], [can_2], ... then fall back to [can].
+  // Also try [tracking_1], [tracking_2], ... then fall back to [tracking].
+  bool found_numbered = false;
+  for (int i = 1; i <= 8; ++i) {
+    char can_group[16];
+    char trk_group[16];
+    std::snprintf(can_group, sizeof(can_group), "can_%d", i);
+    std::snprintf(trk_group, sizeof(trk_group), "tracking_%d", i);
+
+    if (!g_key_file_has_group(kf, can_group))
+      break;
+
+    found_numbered = true;
+    uint16_t fallback_pan  = static_cast<uint16_t>(16 + (i - 1) * 2);
+    uint16_t fallback_tilt = static_cast<uint16_t>(17 + (i - 1) * 2);
+    sys.gimbals.push_back(read_gimbal(kf, can_group,
+                                       fallback_pan, fallback_tilt));
+
+    if (g_key_file_has_group(kf, trk_group))
+      sys.tracking_cfg.push_back(read_tracking(kf, trk_group));
+    else
+      sys.tracking_cfg.push_back(TrackingConfig{});
+  }
+
+  // Legacy single-gimbal: [can] + [tracking]
+  if (!found_numbered) {
+    if (g_key_file_has_group(kf, "can")) {
+      sys.gimbals.push_back(read_gimbal(kf, "can", 16, 18));
+    } else {
+      sys.gimbals.push_back(GimbalConfig{});
+    }
+
+    if (g_key_file_has_group(kf, "tracking"))
+      sys.tracking_cfg.push_back(read_tracking(kf, "tracking"));
+    else
+      sys.tracking_cfg.push_back(TrackingConfig{});
   }
 
   g_key_file_free(kf);

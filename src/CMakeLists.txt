@@ -80,3 +80,28 @@ target_link_directories(inference PRIVATE
 )
 
 target_link_libraries(inference ${COMMON_LIBS})
+
+# --- Home calibration tool ---
+set(CALIBRATE_HOME_SOURCES
+    tools/calibrate_home.cpp
+    core/config.cpp
+    comm/candle_motor.cpp
+)
+
+add_executable(calibrate_home ${CALIBRATE_HOME_SOURCES})
+
+target_include_directories(calibrate_home PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    /usr/include/glib-2.0
+    /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include
+)
+
+target_link_directories(calibrate_home PRIVATE
+    /usr/lib/${LINUX_ARCH}-linux-gnu
+)
+
+target_link_libraries(calibrate_home
+    candle
+    glib-2.0
+    pthread
+)

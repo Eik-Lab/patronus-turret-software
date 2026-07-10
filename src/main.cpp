@@ -4,8 +4,10 @@
 #include "patronus/pipeline/inference_mono.hpp"
 #include "patronus/pipeline/inference_rgb.hpp"
 #include "patronus/tracking/aim_control.hpp"
+#include <candlelib.hpp>
 #include <glib.h>
 #include <gst/gst.h>
+#include <cmath>
 #include <cstdio>
 #include <thread>
 #include <chrono>
@@ -56,55 +58,118 @@ int main(int argc, char *argv[])
   SystemConfig cfg = load_config(cfg_path);
   g_free(config_path);
 
-  // --test-motors: standalone CAN bus test, no cameras needed
+  // ── --test-motors: standalone CAN bus test, no cameras needed ──────────────
   if (test_motors) {
-    patronus::comm::CandleConfig can_cfg;
-    can_cfg.pan_node_id         = cfg.can.pan_node_id;
-    can_cfg.tilt_node_id        = cfg.can.tilt_node_id;
-    can_cfg.datarate            = cfg.can.datarate;
-    can_cfg.max_velocity_rad_s  = cfg.can.max_velocity_rad_s;
-    can_cfg.pds_node_id         = cfg.can.pds_node_id;
-
-    patronus::comm::CandleMotor motor(can_cfg);
+    patronus::comm::CandleMotor motor(cfg.gimbals, cfg.can_bus);
     if (!motor.init()) {
       g_critical("CANDLE MOTOR TEST FAILED -- init()");
       return 1;
     }
-    g_print("CANDLE MOTOR TEST -- both motors enabled\n");
+    g_print("CANDLE MOTOR TEST — %zu gimbal(s) enabled\n", motor.gimbal_count());
 
-    auto run_profile = [&](const char* label, float pv, float tv, int duration_ms) {
-      g_print("  %s (pan=%.1f tilt=%.1f rad/s, %d ms)\n", label, pv, tv, duration_ms);
-      auto start = std::chrono::steady_clock::now();
-      int  count = 0;
-      while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(duration_ms)) {
-        motor.set_velocity(pv, tv);
-        // Read actual velocity every 10 iterations for diagnostics
-        if (++count % 10 == 0) {
-          auto [ap, at] = motor.get_velocity();
-          auto [pp, pt] = motor.get_position();
-          g_print("    actual: pan=%.3f tilt=%.3f  pos: pan=%.2f tilt=%.2f\n", ap, at, pp, pt);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // Read gear ratio from motor firmware to convert motor-shaft → output
+    auto read_gear_ratio = [](mab::MD* md) -> float {
+      if (!md) return 1.0F;
+      auto& reg = md->m_mdRegisters.motorGearRatio;
+      md->readRegister(reg);
+      float ratio = reg.value;
+      return (ratio > 0.0F) ? ratio : 1.0F;
+    };
+
+    for (size_t g = 0; g < motor.gimbal_count(); ++g) {
+      float pan_ratio  = read_gear_ratio(motor.pan_motor(g));
+      float tilt_ratio = read_gear_ratio(motor.tilt_motor(g));
+      float tilt_limit = cfg.gimbals[g].tilt_max_rad;
+      g_print("  gimbal %zu: pan=MD%u tilt=MD%u  gear pan=%.1f:1  tilt=%.1f:1\n",
+              g, motor.pan_motor(g)->m_canId, motor.tilt_motor(g)->m_canId,
+              pan_ratio, tilt_ratio);
+      g_print("  gimbal %zu: output range — pan ±60° (%.2f rad)  tilt ±%.0f° (%.4f rad)\n",
+              g, 1.047, tilt_limit * 180.0 / M_PI, tilt_limit);
+    }
+
+    auto report_all = [&](const char* label) {
+      g_print("  [%s]\n", label);
+      for (size_t g = 0; g < motor.gimbal_count(); ++g) {
+        auto [ap, at] = motor.get_velocity(g);
+        auto [pp, pt] = motor.get_position(g);
+        float pan_ratio  = read_gear_ratio(motor.pan_motor(g));
+        float tilt_ratio = read_gear_ratio(motor.tilt_motor(g));
+        float op = pp / pan_ratio;
+        float ot = pt / tilt_ratio;
+        g_print("    gimbal %zu  vel %+.3f %+.3f  motor %+.2f %+.2f  output %+.1f° %+.1f°\n",
+                g, ap, at, pp, pt,
+                op * 180.0 / M_PI, ot * 180.0 / M_PI);
       }
     };
 
-    run_profile("spinning pan",   0.5F,  0.0F, 3000);
-    run_profile("spinning tilt",  0.0F,  0.5F, 3000);
-    run_profile("spinning both",  1.0F,  1.0F, 3000);
-    run_profile("reversing both", -1.0F, -1.0F, 3000);
-    run_profile("stopping",       0.0F,  0.0F, 1000);
+    auto wait_home_all = [&](const char* label, int timeout_ms) {
+      g_print("--- %s ---\n", label);
+      auto start = std::chrono::steady_clock::now();
+      int  count = 0;
+      for (;;) {
+        bool all_home = true;
+        for (size_t g = 0; g < motor.gimbal_count(); ++g) {
+          bool at_home = motor.return_to_home(g, 1.0F, 0.05F, 1.5F);
+          all_home = all_home && at_home;
+        }
+        if (++count % 5 == 0) report_all("");
+        if (all_home) break;
+        if (std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(timeout_ms)) {
+          g_print("  (timeout)\n");
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      report_all("at home");
+    };
 
+    // Lissajous figure-8: pan at ω, tilt at 2ω — traces a figure-8 pattern
+    auto lissajous = [&](const char* label, float amp, float omega,
+                          float freq_ratio, int duration_ms) {
+      g_print("--- %s ---\n", label);
+      auto start = std::chrono::steady_clock::now();
+      int  count = 0;
+      while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(duration_ms)) {
+        float t = std::chrono::duration<float>(
+            std::chrono::steady_clock::now() - start).count();
+        float pv = amp * std::cos(omega * t);
+        float tv = amp * std::cos(freq_ratio * omega * t);
+        for (size_t g = 0; g < motor.gimbal_count(); ++g)
+          motor.set_velocity(g, pv, tv);
+        if (++count % 10 == 0) report_all("");
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      for (size_t g = 0; g < motor.gimbal_count(); ++g)
+        motor.set_velocity(g, 0.0F, 0.0F);
+      report_all("at end of lissajous");
+    };
+
+    float sweep_speed = 0.5F;
+
+    // 1. Start at home
+    wait_home_all("return to home", 5000);
+
+    // 2. Lissajous figure-8 scan — 4 cycles (ω = 0.5 rad/s, cycle = 12.57 s)
+    //    Both axes move simultaneously: pan at ω, tilt at 2ω.
+    lissajous("figure-8 scan (4 cycles)", sweep_speed, 0.5F, 2.0F, 50000);
+
+    // 3. Final stop at home
+    for (size_t g = 0; g < motor.gimbal_count(); ++g)
+      motor.set_velocity(g, 0.0F, 0.0F);
+    report_all("test complete — at home");
     motor.disable();
     g_print("CANDLE MOTOR TEST PASSED\n");
     return 0;
   }
 
+  // ── Normal inference + tracking mode ───────────────────────────────────────
+
   // CLI flags override config file
   if (rgb_only) cfg.mode = "rgb";
   if (mono_only) cfg.mode = "mono";
 
-  g_print("Patronus inference — mode=%s  tracking=%s\n",
-          cfg.mode.c_str(), cfg.tracking ? "on" : "off");
+  g_print("Patronus inference — mode=%s  tracking=%s  gimbals=%zu\n",
+          cfg.mode.c_str(), cfg.tracking ? "on" : "off", cfg.gimbals.size());
 
   // Launch pipeline threads
   std::thread rgb_thread;
@@ -122,52 +187,94 @@ int main(int argc, char *argv[])
     });
   }
 
-  // Tracking thread — consumes detections and drives CAN bus motors.
-  std::thread tracking_thread;
+  // Tracking threads — one per gimbal, each consumes detections and drives motors.
+  std::vector<std::thread> tracking_threads;
   if (cfg.tracking) {
-    patronus::comm::CandleConfig can_cfg;
-    can_cfg.pan_node_id         = cfg.can.pan_node_id;
-    can_cfg.tilt_node_id        = cfg.can.tilt_node_id;
-    can_cfg.datarate            = cfg.can.datarate;
-    can_cfg.max_velocity_rad_s  = cfg.can.max_velocity_rad_s;
-    can_cfg.pds_node_id         = cfg.can.pds_node_id;
+    auto motor = std::make_shared<patronus::comm::CandleMotor>(
+        cfg.gimbals, cfg.can_bus);
+    if (!motor->init()) {
+      g_critical("Failed to initialise CANdle motor driver — tracking disabled");
+    } else {
+      for (size_t g = 0; g < motor->gimbal_count(); ++g) {
+        float tilt_limit = cfg.gimbals[g].tilt_max_rad;
+        g_print("Tracking gimbal %zu started (max %.2f rad/s, tilt limit ±%.2f rad)\n",
+                g, cfg.gimbals[g].max_velocity_rad_s, tilt_limit);
 
-    tracking_thread = std::thread([cfg, can_cfg]() {
-      patronus::comm::CandleMotor motor(can_cfg);
-      if (!motor.init()) {
-        g_critical("Failed to initialise CANdle motor driver — tracking disabled");
-        return;
+        // Each gimbal gets a copy of its tracking config and shared motor handle
+        auto trk = cfg.tracking_cfg[g];
+        auto gimbal_cfg = cfg.gimbals[g];
+        auto mode = cfg.mode;
+
+        tracking_threads.emplace_back([motor, g, trk, gimbal_cfg, mode]() {
+          // Pick the active detection queue — round-robin by gimbal index
+          auto* det = (g % 2 == 0) ?
+              ((mode == "mono") ? &detection_mono : &detection_rgb) :
+              ((mode == "mono") ? &detection_rgb : &detection_mono);
+
+          enum class State { TRACKING, RETURNING_HOME, AT_HOME };
+          State state = State::TRACKING;
+          auto last_detection = std::chrono::steady_clock::now();
+
+          for (;;) {
+            auto opt = det->try_pop(std::chrono::milliseconds(10));
+
+            if (opt.has_value()) {
+              state = State::TRACKING;
+              last_detection = std::chrono::steady_clock::now();
+
+              Detection d = *opt;
+              Point center{d.left + d.width / 2.0F,
+                           d.top + d.height / 2.0F};
+
+              AimAngles err = compute_control_sensor(center, 0.006F);
+
+              float pan_vel  = err.pan  * gimbal_cfg.max_velocity_rad_s;
+              float tilt_vel = err.tilt * gimbal_cfg.max_velocity_rad_s;
+
+              motor->set_velocity(g, pan_vel, tilt_vel);
+            } else {
+              switch (state) {
+                case State::TRACKING: {
+                  if (trk.home_return_enabled) {
+                    auto elapsed = std::chrono::steady_clock::now() - last_detection;
+                    if (elapsed >= std::chrono::milliseconds(trk.home_return_delay_ms)) {
+                      state = State::RETURNING_HOME;
+                      g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
+                    } else {
+                      motor->set_velocity(g, 0.0F, 0.0F);
+                    }
+                  } else {
+                    motor->set_velocity(g, 0.0F, 0.0F);
+                  }
+                  break;
+                }
+                case State::RETURNING_HOME: {
+                  bool at_home = motor->return_to_home(
+                      g, trk.home_return_gain, trk.home_tolerance_rad,
+                      trk.home_return_max_velocity);
+                  if (at_home) {
+                    state = State::AT_HOME;
+                    motor->set_velocity(g, 0.0F, 0.0F);
+                    g_print("Tracking gimbal %zu: at home position\n", g);
+                  }
+                  break;
+                }
+                case State::AT_HOME: {
+                  motor->set_velocity(g, 0.0F, 0.0F);
+                  break;
+                }
+              }
+            }
+          }
+        });
       }
-      g_print("Tracking loop started (max %.2f rad/s)\n", can_cfg.max_velocity_rad_s);
-
-      // Pick the active detection queue
-      auto* det = (cfg.mode == "mono") ? &detection_mono : &detection_rgb;
-
-      for (;;) {
-        // Non-blocking: if no detection arrives within 10ms, command stop
-        auto opt = det->try_pop(std::chrono::milliseconds(10));
-        if (opt.has_value()) {
-          Detection d = *opt;
-          Point center{d.left + d.width / 2.0F,
-                       d.top + d.height / 2.0F};
-
-          AimAngles err = compute_control_sensor(center, 0.005F);
-
-          float pan_vel  = err.pan  * can_cfg.max_velocity_rad_s;
-          float tilt_vel = err.tilt * can_cfg.max_velocity_rad_s;
-
-          motor.set_velocity(pan_vel, tilt_vel);
-        } else {
-          // No target — stop the gimbal
-          motor.set_velocity(0.0F, 0.0F);
-        }
-      }
-    });
+    }
   }
 
-  if (rgb_thread.joinable())    rgb_thread.join();
-  if (mono_thread.joinable())   mono_thread.join();
-  if (tracking_thread.joinable()) tracking_thread.join();
+  if (rgb_thread.joinable())       rgb_thread.join();
+  if (mono_thread.joinable())      mono_thread.join();
+  for (auto& t : tracking_threads)
+    if (t.joinable()) t.join();
 
   return 0;
 }
