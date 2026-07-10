@@ -1,6 +1,3 @@
-cmake_minimum_required(VERSION 3.10)
-project(inference)
-
 execute_process(COMMAND gcc -dumpmachine
     OUTPUT_VARIABLE LINUX_ARCH_FULL
     OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -15,53 +12,96 @@ message("-- COMPILE_TO_ARCH: ${LINUX_ARCH}")
 
 if("${LINUX_ARCH}" STREQUAL "aarch64")
     message("-- aarch64 Jetson TEGRA")
-    set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPLATFORM_TEGRA")
-    # If you want to use C++ on Jetson, rename the source file from .c to .cpp
-    # set(CMAKE_CXX_STANDARD 11)
-    # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPLATFORM_TEGRA")
-
 elseif("${LINUX_ARCH}" STREQUAL "x86_64")
     message("-- X86 dGPU")
-    set(CMAKE_CXX_STANDARD 17)
-    # set(CMAKE_C_STANDARD 11)
-
 endif()
 
 set(SRC_PATH /opt/nvidia/deepstream/deepstream-${DS_VERSION})
 set(SRC_INC2 ${SRC_PATH}/sources/includes)
 
-include_directories(
-        ${PROJECT_SOURCE_DIR}/deepstream/nvdinfer
-        ${PROJECT_SOURCE_DIR}
-        ${SRC_INC2}
-        /usr/local/cuda-${CUDA_VER}/include
-        /usr/include/gstreamer-1.0
-        /usr/include/glib-2.0
-        /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include
+set(CANDLESDK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CANDLESDK_BUILD_CANDLETOOL OFF CACHE BOOL "" FORCE)
+set(CANDLE_BUILD_STATIC ON CACHE BOOL "" FORCE)
+
+# clang-tidy integration
+# Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
+find_program(CLANG_TIDY NAMES clang-tidy)
+if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF")
+  set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
+    "--extra-arg=-std=c++17"
+    "--extra-arg=-I${PROJECT_SOURCE_DIR}/include"
+    "--warnings-as-errors=*"
+  )
+  message("-- clang-tidy: ${CLANG_TIDY}")
+else()
+  unset(CMAKE_CXX_CLANG_TIDY CACHE)
+  set(CMAKE_CXX_CLANG_TIDY "")
+  if(NOT CLANG_TIDY)
+    message("-- clang-tidy: NOT FOUND (install via 'apt install clang-tidy' or 'brew install llvm')")
+  endif()
+endif()
+
+add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
+
+set(COMMON_LIBS
+    -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
+    -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
+    -lcudart -lcuda
+    -lpthread
+    candle
 )
 
-link_directories(
-        ${SRC_PATH}/lib
-        /usr/local/cuda-${CUDA_VER}/lib64
-        /usr/lib/${LINUX_ARCH}-linux-gnu
-        /usr/lib/${LINUX_ARCH}-linux-gnu/gstreamer-1.0
-)
-
-set(SRCS
-    deepstream/nvdinfer/yolo_inference_mono.cpp
-    deepstream/nvdinfer/yolo_inference_rgb.cpp
-    deepstream/nvdinfer/
+set(INFERENCE_SOURCES
     main.cpp
+    core/config.cpp
+    pipeline/inference_mono.cpp
+    pipeline/inference_rgb.cpp
+    tracking/aim_control.cpp
+    comm/candle_motor.cpp
 )
 
-add_executable(inference ${SRCS})
+add_executable(inference ${INFERENCE_SOURCES})
 
-add_subdirectory(deps/CANdle-SDK)
-target_link_libraries(inference PRIVATE candle)
+target_include_directories(inference PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${SRC_INC2}
+    /usr/local/cuda-${CUDA_VER}/include
+    /usr/include/gstreamer-1.0
+    /usr/include/glib-2.0
+    /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include
+)
 
-target_link_libraries(inference
-        -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
-        -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
-        -lcudart -lcuda
-        -lpthread)
+target_link_directories(inference PRIVATE
+    ${SRC_PATH}/lib
+    /usr/local/cuda-${CUDA_VER}/lib64
+    /usr/lib/${LINUX_ARCH}-linux-gnu
+    /usr/lib/${LINUX_ARCH}-linux-gnu/gstreamer-1.0
+)
+
+target_link_libraries(inference ${COMMON_LIBS})
+
+# --- Home calibration tool ---
+set(CALIBRATE_HOME_SOURCES
+    tools/calibrate_home.cpp
+    core/config.cpp
+    comm/candle_motor.cpp
+)
+
+add_executable(calibrate_home ${CALIBRATE_HOME_SOURCES})
+
+target_include_directories(calibrate_home PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    /usr/include/glib-2.0
+    /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include
+)
+
+target_link_directories(calibrate_home PRIVATE
+    /usr/lib/${LINUX_ARCH}-linux-gnu
+)
+
+target_link_libraries(calibrate_home
+    candle
+    glib-2.0
+    pthread
+)

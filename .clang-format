@@ -1,0 +1,116 @@
+---
+Language: Cpp
+BasedOnStyle: Chromium
+IndentWidth: 2
+AccessModifierOffset: -2
+ConstructorInitializerIndentWidth: 2
+ContinuationIndentWidth: 2
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: true
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBinaryOperators: None
+BreakBeforeBraces: Attach
+BreakBeforeInheritanceComma: false
+BreakInheritanceList: BeforeColon
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakAfterJavaFieldAnnotations: false
+BreakStringLiterals: true
+ColumnLimit: 100
+CommentPragmas: '^ IWYU pragma:'
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+DerivePointerAlignment: false
+DisableFormat: false
+ExperimentalAutoDetectBinPacking: false
+FixNamespaceComments: true
+ForEachMacros:
+  - foreach
+  - Q_FOREACH
+  - BOOST_FOREACH
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:           '^"(patronus/.*)"'
+    Priority:        1
+    SortPriority:    0
+    CaseSensitive:   true
+  - Regex:           '^"(.*)"'
+    Priority:        2
+    SortPriority:    0
+    CaseSensitive:   true
+  - Regex:           '^<(gst|glib|nvds|cuda|Nv|nvosd)'
+    Priority:        3
+    SortPriority:    0
+    CaseSensitive:   true
+  - Regex:           '^<.*\.h>'
+    Priority:        4
+    SortPriority:    0
+    CaseSensitive:   true
+  - Regex:           '^<.*>'
+    Priority:        5
+    SortPriority:    0
+    CaseSensitive:   true
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+IncludeIsMainSourceRegex: ''
+IndentCaseLabels: true
+IndentGotoLabels: true
+IndentPPDirectives: BeforeHash
+IndentWrappedFunctionNames: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MacroBlockBegin: ''
+MacroBlockEnd: ''
+MaxEmptyLinesToKeep: 2
+NamespaceIndentation: Inner
+ObjCBinPackProtocolList: Auto
+ObjCBlockIndentWidth: 2
+ObjCSpaceAfterProperty: false
+ObjCSpaceBeforeProtocolList: true
+PenaltyBreakAssignment: 2
+PenaltyBreakBeforeFirstCallParameter: 1
+PenaltyBreakComment: 300
+PenaltyBreakFirstLessLess: 120
+PenaltyBreakString: 1000
+PenaltyBreakTemplateDeclaration: 10
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 200
+PointerAlignment: Right
+ReflowComments: true
+SortIncludes: CaseSensitive
+SortUsingDeclarations: true
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 1
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+Standard: c++17
+StatementMacros:
+  - Q_UNUSED
+  - QT_REQUIRE_VERSION
+TabWidth: 2
+UseTab: Never
