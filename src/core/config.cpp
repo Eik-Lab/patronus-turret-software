@@ -102,6 +102,14 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
   return cfg;
 }
 
+static SensorConfig read_sensor(GKeyFile *kf, const gchar *group) {
+  SensorConfig cfg;
+  cfg.enabled_ = read_bool(kf, group, "enabled", false);
+  cfg.port_ = read_string(kf, group, "port", "/dev/ttyACM0");
+  cfg.baud_rate_ = read_string(kf, group, "baud_rate", "B115200");
+  return cfg;
+}
+
 SystemConfig load_config(const std::string &path) {
   SystemConfig sys;
 
@@ -126,6 +134,10 @@ SystemConfig load_config(const std::string &path) {
   // [mono]
   if (g_key_file_has_group(kf, "mono"))
     sys.mono_ = read_pipeline(kf, "mono");
+
+  // [sensor]
+  if (g_key_file_has_group(kf, "sensor"))
+    sys.sensor_ = read_sensor(kf, "sensor");
 
   // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {

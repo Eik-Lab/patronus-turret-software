@@ -42,12 +42,20 @@ struct CanBusConfig {
   uint16_t pds_node_id_{100}; ///< PDS module CAN ID (0 to skip).
 };
 
+/// @brief Sensor module configuration for serial communication.
+struct SensorConfig {
+  bool enabled_{false};              ///< Enable sensor data reading.
+  std::string port_{"/dev/ttyACM0"}; ///< Serial port device path.
+  std::string baud_rate_{"B115200"}; ///< Baud rate string (e.g., "B9600", "B115200").
+};
+
 /// @brief Top-level system configuration.
 struct SystemConfig {
   std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
   bool tracking_{false};                     ///< Enable tracking loop.
   PipelineConfig rgb_;                       ///< RGB pipeline config.
   PipelineConfig mono_;                      ///< Mono pipeline config.
+  SensorConfig sensor_;                      ///< Sensor module config.
   CanBusConfig can_bus_;                     ///< Shared CAN bus settings.
   std::vector<GimbalConfig> gimbals_;        ///< Per-gimbal CAN + limits.
   std::vector<TrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.
