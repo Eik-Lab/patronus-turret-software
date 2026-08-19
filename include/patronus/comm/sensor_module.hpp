@@ -7,9 +7,13 @@
 namespace patronus::comm {
 
 /// @brief Sensor data read from the serial port.
-struct SensorData {
-  float distance{0.0F};  ///< Distance measurement in cm.
-  std::string gps;       ///< GPS coordinates as string.
+struct SensorData
+{
+    float distance = 0.0F;
+    double latitude = 0.0;
+    double longitude = 0.0;
+    bool has_distance = false;
+    bool has_gps = false;
 };
 
 /// @brief Convert baud rate string to speed_t.
