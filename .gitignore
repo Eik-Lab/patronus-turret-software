@@ -51,4 +51,5 @@ anomaly/**/build/
 src/deepstream/
 deps/DeepStream-Yolo/
 build/
+__pycache__/
 
