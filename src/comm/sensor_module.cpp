@@ -1,3 +1,8 @@
+#include "patronus/comm/sensor_module.hpp"
+
+#include <glib.h>
+
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -7,13 +12,20 @@
 #include <termios.h>
 #include <unistd.h>
 
-struct SensorData
-{
-    float distance = 0.0F;
-    std::string gps;
-};
+namespace patronus::comm {
 
-int openSerialPort(const char* portname)
+speed_t baudStringToSpeed(const std::string &baud_str) {
+  if (baud_str == "B9600")   return B9600;
+  if (baud_str == "B19200")  return B19200;
+  if (baud_str == "B38400")  return B38400;
+  if (baud_str == "B57600")  return B57600;
+  if (baud_str == "B115200") return B115200;
+
+  g_warning("Unsupported baud rate string '%s', defaulting to B115200", baud_str.c_str());
+  return B115200;
+}
+
+int openSerialPort(const char *portname)
 {
     int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
 
@@ -120,9 +132,50 @@ void closeSerialPort(int fd)
         close(fd);
 }
 
+void runSensorThread(const std::string &port, const std::string &baud_str,
+                     std::atomic<bool> &running) {
+  speed_t baud_speed = baudStringToSpeed(baud_str);
+
+  int fd = openSerialPort(port.c_str());
+  if (fd < 0) {
+    g_critical("Failed to open sensor serial port: %s", port.c_str());
+    return;
+  }
+
+  if (!configureSerialPort(fd, baud_speed)) {
+    g_critical("Failed to configure sensor serial port");
+    closeSerialPort(fd);
+    return;
+  }
+
+  g_print("Sensor module started: port=%s baud=%s\n", port.c_str(), baud_str.c_str());
+
+  while (running) {
+    SensorData data;
+    if (readSensorData(fd, data)) {
+      g_print("Sensor: distance=%.2f cm  GPS=%s\n", data.distance, data.gps.c_str());
+    } else {
+      g_warning("Failed to read sensor data");
+      break;
+    }
+  }
+
+  closeSerialPort(fd);
+  g_print("Sensor module stopped\n");
+}
+
+} // namespace patronus::comm
+
+// ── Standalone test main (comment out when building as library) ──────────────
+#ifdef SENSOR_MODULE_TEST_MAIN
 int main()
-// this functions is for testing the data reading
 {
+    using patronus::comm::closeSerialPort;
+    using patronus::comm::configureSerialPort;
+    using patronus::comm::openSerialPort;
+    using patronus::comm::readSensorData;
+    using patronus::comm::SensorData;
+
     int fd = openSerialPort("/dev/ttyACM0");
 
     if (fd < 0) {
@@ -151,3 +204,4 @@ int main()
     closeSerialPort(fd);
     return 0;
 }
+#endif

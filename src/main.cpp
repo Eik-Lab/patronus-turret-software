@@ -1,4 +1,5 @@
 #include "patronus/comm/candle_motor.hpp"
+#include "patronus/comm/sensor_module.hpp"
 #include "patronus/core/config.hpp"
 #include "patronus/core/state.hpp"
 #include "patronus/pipeline/inference_mono.hpp"
@@ -184,6 +185,14 @@ int main(int argc, char *argv[]) {
 
   std::thread rgb_thread;
   std::thread mono_thread;
+  std::thread sensor_thread;
+
+  // Sensor data reading thread
+  if (cfg.sensor_.enabled_) {
+    sensor_thread = std::thread([&]() {
+      patronus::comm::runSensorThread(cfg.sensor_.port_, cfg.sensor_.baud_rate_, running);
+    });
+  }
 
   if (cfg.mode_ != "mono" && cfg.rgb_.enabled_) {
     rgb_thread = std::thread([&]() {
@@ -285,6 +294,8 @@ int main(int argc, char *argv[]) {
     rgb_thread.join();
   if (mono_thread.joinable())
     mono_thread.join();
+  if (sensor_thread.joinable())
+    sensor_thread.join();
   for (auto &t : tracking_threads)
     if (t.joinable())
       t.join();
