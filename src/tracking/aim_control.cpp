@@ -10,8 +10,6 @@ static constexpr float k_weapon_dx = 67.0F;
 static constexpr float k_weapon_dy = -34.0F;
 static constexpr float k_weapon_dz = 0.0F;
 
-static constexpr float k_target_distance_mm = 100000.0F;
-
 // Sensor-frame pixel centre (half of 1920x1080).
 static constexpr float k_frame_cx = 1920.0F / 2.0F;
 static constexpr float k_frame_cy = 1080.0F / 2.0F;
@@ -35,13 +33,13 @@ core::AimAngles compute_control_sensor(core::Point center, float Kp) {
 
 // Project sensor aim vector onto the weapon bore axis, compensating for
 // the physical lever-arm offset between camera and weapon.
-core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt) {
+core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, float target_distance) {
   float pan_rad = sensor_pan * (static_cast<float>(M_PI) / 180.0F);
   float tilt_rad = sensor_tilt * (static_cast<float>(M_PI) / 180.0F);
 
-  float tx = k_target_distance_mm * std::cos(tilt_rad) * std::cos(pan_rad);
-  float ty = k_target_distance_mm * std::cos(tilt_rad) * std::sin(pan_rad);
-  float tz = k_target_distance_mm * std::sin(tilt_rad);
+  float tx = target_distance * std::cos(tilt_rad) * std::cos(pan_rad);
+  float ty = target_distance * std::cos(tilt_rad) * std::sin(pan_rad);
+  float tz = target_distance * std::sin(tilt_rad);
 
   float vx = tx - k_weapon_dx;
   float vy = ty - k_weapon_dy;
