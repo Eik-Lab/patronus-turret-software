@@ -103,6 +103,77 @@ def check_cuda():
         return ["nvidia-smi not found (check CUDA installation)"]
 
 
+USBFS_MEMORY_MB_PATH = "/sys/module/usbcore/parameters/usbfs_memory_mb"
+USBFS_MEMORY_MB_MIN = 256  # Minimum for two high-res Basler USB3 cameras
+
+
+def check_usbfs_memory():
+    """Check that usbfs memory is sufficient for two high-bandwidth cameras."""
+    issues = []
+    try:
+        with open(USBFS_MEMORY_MB_PATH, "r") as f:
+            current_mb = int(f.read().strip())
+        if current_mb < USBFS_MEMORY_MB_MIN:
+            issues.append(
+                f"  usbfs_memory_mb={current_mb} MB (need >= {USBFS_MEMORY_MB_MIN} MB for "
+                f"two high-res USB3 cameras)"
+            )
+            issues.append(
+                f"  To make persistent, add kernel boot param: "
+                f"usbcore.usbfs_memory_mb={USBFS_MEMORY_MB_MIN}"
+            )
+    except (PermissionError, FileNotFoundError, ValueError):
+        issues.append(f"  Could not read {USBFS_MEMORY_MB_PATH}")
+    return issues
+
+
+def ensure_usbfs_memory():
+    """Try to increase usbfs_memory_mb to USBFS_MEMORY_MB_MIN via sudo."""
+    try:
+        with open(USBFS_MEMORY_MB_PATH, "r") as f:
+            current_mb = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        eprint(f"warning: could not read {USBFS_MEMORY_MB_PATH}")
+        return
+
+    if current_mb >= USBFS_MEMORY_MB_MIN:
+        return
+
+    print(f"Increasing usbfs memory: {current_mb} MB -> {USBFS_MEMORY_MB_MIN} MB ...")
+    try:
+        result = subprocess.run(
+            ["sudo", "sh", "-c",
+             f"echo {USBFS_MEMORY_MB_MIN} > {USBFS_MEMORY_MB_PATH}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            eprint(
+                f"warning: failed to increase usbfs_memory_mb (sudo). "
+                f"Run manually: sudo sh -c 'echo {USBFS_MEMORY_MB_MIN} > {USBFS_MEMORY_MB_PATH}'"
+            )
+        else:
+            print(f"  usbfs_memory_mb set to {USBFS_MEMORY_MB_MIN} MB")
+    except FileNotFoundError:
+        eprint("warning: sudo not found — cannot auto-increase usbfs memory")
+    except subprocess.TimeoutExpired:
+        eprint("warning: sudo timed out — cannot auto-increase usbfs memory")
+
+
+def check_pylon_sdk():
+    """Check that the Basler pylon SDK is installed and on the library path."""
+    issues = []
+    pylon_lib = "/opt/pylon/lib"
+    if not os.path.isdir(pylon_lib):
+        issues.append("  /opt/pylon/lib not found — install Basler pylon SDK")
+        return issues
+
+    # Check that the USB transport layer library exists
+    usb_tl = os.path.join(pylon_lib, "libpylon_TL_usb.so")
+    if not os.path.isfile(usb_tl):
+        issues.append(f"  USB transport layer missing: {usb_tl}")
+    return issues
+
+
 def check_cameras():
     """Check if Basler cameras are visible via pylon tools."""
     # Try pylon-config first, then pylonCLI
@@ -145,6 +216,8 @@ def cmd_validate(args):
     checks = [
         ("CUDA", check_cuda),
         ("DeepStream libraries", check_deepstream),
+        ("USB memory (usbfs)", check_usbfs_memory),
+        ("Pylon SDK", check_pylon_sdk),
         ("Model files", check_model_files),
         ("Custom YOLO bbox parser", check_custom_lib),
         ("Basler cameras", check_cameras),
@@ -261,6 +334,10 @@ def cmd_run(args, remaining_argv):
 
     ensure_built(args.dry_run, args)
 
+    # Ensure USB buffer memory is sufficient for two high-res cameras
+    if not args.dry_run:
+        ensure_usbfs_memory()
+
     # Build the inference command
     cmd = [INFERENCE_BIN]
     cmd.extend(["--config", config_abs])
@@ -276,8 +353,15 @@ def cmd_run(args, remaining_argv):
     if args.dry_run:
         return 0
 
+    # Ensure pylon SDK is on the library path so pylonsrc can find the USB transport layer
+    env = os.environ.copy()
+    pylon_lib = "/opt/pylon/lib"
+    if os.path.isdir(pylon_lib):
+        ld_path = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = pylon_lib + (f":{ld_path}" if ld_path else "")
+
     # Launch and handle Ctrl+C gracefully
-    process = subprocess.Popen(cmd, cwd=PROJECT_ROOT)
+    process = subprocess.Popen(cmd, cwd=PROJECT_ROOT, env=env)
 
     def signal_handler(sig, frame):
         print("\nShutting down pipelines...")
