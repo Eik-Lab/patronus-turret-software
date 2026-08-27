@@ -110,6 +110,14 @@ static SensorConfig read_sensor(GKeyFile *kf, const gchar *group) {
   return cfg;
 }
 
+static CommandConfig read_command(GKeyFile *kf, const gchar *group) {
+  CommandConfig cfg;
+  cfg.enabled_ = read_bool(kf, group, "enabled", false);
+  cfg.host_ = read_string(kf, group, "host", "0.0.0.0");
+  cfg.port_ = read_uint16(kf, group, "port", 5002);
+  return cfg;
+}
+
 SystemConfig load_config(const std::string &path) {
   SystemConfig sys;
 
@@ -138,6 +146,10 @@ SystemConfig load_config(const std::string &path) {
   // [sensor]
   if (g_key_file_has_group(kf, "sensor"))
     sys.sensor_ = read_sensor(kf, "sensor");
+
+  // [commands]
+  if (g_key_file_has_group(kf, "commands"))
+    sys.command_ = read_command(kf, "commands");
 
   // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {
