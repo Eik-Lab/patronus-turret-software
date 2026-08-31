@@ -23,7 +23,9 @@
 
 #include <stdio.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <vector>
 
 #define MAX_DISPLAY_LEN 64
 
@@ -42,6 +44,17 @@ namespace patronus::pipeline {
 static patronus::core::LatestValue<patronus::core::Detection> *g_output_rgb = nullptr;
 static GMainLoop *g_loop_rgb = nullptr;
 
+static float iou_rect(const NvOSD_RectParams &a, const NvOSD_RectParams &b) {
+  float ax2 = a.left + a.width, ay2 = a.top + a.height;
+  float bx2 = b.left + b.width, by2 = b.top + b.height;
+  float ix1 = std::max(a.left, b.left), iy1 = std::max(a.top, b.top);
+  float ix2 = std::min(ax2, bx2), iy2 = std::min(ay2, by2);
+  float iw = std::max(0.0f, ix2 - ix1), ih = std::max(0.0f, iy2 - iy1);
+  float inter = iw * ih;
+  float uni = a.width * a.height + b.width * b.height - inter;
+  return uni > 0.0f ? inter / uni : 0.0f;
+}
+
 // OSD probe: overlay drone count on video and forward detections to tracking.
 static GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info,
                                                    gpointer u_data) {
@@ -56,6 +69,29 @@ static GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo 
 
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL; l_frame = l_frame->next) {
     NvDsFrameMeta *frame_meta = (NvDsFrameMeta *)(l_frame->data);
+
+    std::vector<NvDsObjectMeta *> drones;
+    for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
+      obj_meta = (NvDsObjectMeta *)(l_obj->data);
+      if (obj_meta->class_id == PGIE_CLASS_ID_DRONE)
+        drones.push_back(obj_meta);
+    }
+    std::sort(drones.begin(), drones.end(),
+              [](NvDsObjectMeta *a, NvDsObjectMeta *b) { return a->confidence > b->confidence; });
+    std::vector<bool> suppressed(drones.size(), false);
+    for (size_t i = 0; i < drones.size(); i++) {
+      if (suppressed[i])
+        continue;
+      for (size_t j = i + 1; j < drones.size(); j++) {
+        if (!suppressed[j] && iou_rect(drones[i]->rect_params, drones[j]->rect_params) > 0.45f)
+          suppressed[j] = true;
+      }
+    }
+    for (size_t i = 0; i < drones.size(); i++) {
+      if (suppressed[i])
+        nvds_remove_obj_meta_from_frame(frame_meta, drones[i]);
+    }
+
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL; l_obj = l_obj->next) {
       obj_meta = (NvDsObjectMeta *)(l_obj->data);
       if (obj_meta->class_id == PGIE_CLASS_ID_DRONE) {
@@ -132,7 +168,7 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
   GMainLoop *loop = NULL;
   GstElement *pipeline = NULL, *source = NULL, *capsfilter_src = NULL, *nvvidconv_pre = NULL,
              *nvvidconv_post = NULL, *capsfilter_encoder = NULL, *streammux = NULL,
-             *udp_sink = NULL, *pgie = NULL, *nvvidconv = NULL, *nvosd = NULL, *encoder = NULL,
+             *udp_sink = NULL, *pgie = NULL, *preprocess = NULL, *nvvidconv = NULL, *nvosd = NULL, *encoder = NULL,
              *payload_encode = NULL;
   GstCaps *caps_src = NULL, *caps_encoder = NULL;
 
@@ -182,6 +218,10 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
     pgie = gst_element_factory_make("nvinfer", "primary-nvinference-engine");
   }
 
+  preprocess = gst_element_factory_make("nvdspreprocess", "preprocess");
+  g_object_set(G_OBJECT(preprocess), "config-file",
+               "config/deepstream/config_preprocess_rgb.txt", NULL);
+
   nvvidconv = gst_element_factory_make("nvvideoconvert", "nvvideo-converter");
 
   nvosd = gst_element_factory_make("nvdsosd", "nv-onscreendisplay");
@@ -205,7 +245,7 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
   g_object_set(G_OBJECT(udp_sink), "host", config.udp_host_.c_str(), "port", config.udp_port_,
                "sync", FALSE, "async", FALSE, NULL);
 
-  if (!source || !capsfilter_src || !nvvidconv_pre || !pgie || !nvvidconv || !nvosd ||
+  if (!source || !capsfilter_src || !nvvidconv_pre || !preprocess || !pgie || !nvvidconv || !nvosd ||
       !nvvidconv_post || !capsfilter_encoder || !encoder || !payload_encode || !udp_sink) {
     g_printerr("One element could not be created. Exiting.\n");
     free(infer_config_abs);
@@ -230,9 +270,9 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
   bus_watch_id = gst_bus_add_watch(bus, bus_call, loop);
   gst_object_unref(bus);
 
-  gst_bin_add_many(GST_BIN(pipeline), source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-                   nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode,
-                   udp_sink, NULL);
+  gst_bin_add_many(GST_BIN(pipeline), source, capsfilter_src, nvvidconv_pre, streammux, preprocess,
+                   pgie, nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder,
+                   payload_encode, udp_sink, NULL);
   g_print("Added elements to bin\n");
 
   GstPad *sinkpad, *srcpad;
@@ -264,8 +304,8 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
     return -1;
   }
 
-  if (!gst_element_link_many(streammux, pgie, nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder,
-                             encoder, payload_encode, udp_sink, NULL)) {
+  if (!gst_element_link_many(streammux, preprocess, pgie, nvvidconv, nvosd, nvvidconv_post,
+                             capsfilter_encoder, encoder, payload_encode, udp_sink, NULL)) {
     g_printerr("Elements could not be linked: 2. Exiting.\n");
     return -1;
   }
