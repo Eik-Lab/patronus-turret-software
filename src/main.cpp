@@ -30,6 +30,7 @@ static patronus::core::LatestValue<patronus::core::Detection> detection_mono;
 
 int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
+  gchar *detector = nullptr;
   gboolean rgb_only = FALSE;
   gboolean mono_only = FALSE;
   gboolean test_motors = FALSE;
@@ -37,6 +38,8 @@ int main(int argc, char *argv[]) {
   GOptionEntry entries[] = {
     {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config_path,
      "Path to system config file (default: config/system.ini)", "FILE"},
+    {"detector", 'd', 0, G_OPTION_ARG_STRING, &detector,
+     "Detector model to use: yolov8 or rf-detr (default: from config file)", "NAME"},
     {"rgb-only", 'r', 0, G_OPTION_ARG_NONE, &rgb_only, "Run RGB pipeline only", nullptr},
     {"mono-only", 'm', 0, G_OPTION_ARG_NONE, &mono_only, "Run mono pipeline only", nullptr},
     {"test-motors", 't', 0, G_OPTION_ARG_NONE, &test_motors,
@@ -63,6 +66,21 @@ int main(int argc, char *argv[]) {
   std::string cfg_path = config_path ? config_path : "config/system.ini";
   SystemConfig cfg = load_config(cfg_path);
   g_free(config_path);
+
+  // --detector overrides the inference config path from system.ini.
+  if (detector) {
+    std::string det = detector;
+    g_free(detector);
+    if (det == "rf-detr") {
+      const std::string rfdetr_cfg = "config/deepstream/config_infer_primary_rfdetr.txt";
+      cfg.rgb_.infer_config_ = rfdetr_cfg;
+      cfg.mono_.infer_config_ = rfdetr_cfg;
+    } else if (det != "yolov8") {
+      g_printerr("Unknown detector '%s' (expected 'yolov8' or 'rf-detr')\n", det.c_str());
+      return 1;
+    }
+    g_print("Detector override: %s\n", det.c_str());
+  }
 
   std::signal(SIGTERM, signal_handler);
   std::signal(SIGINT, signal_handler);

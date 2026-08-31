@@ -345,6 +345,8 @@ def cmd_run(args, remaining_argv):
         cmd.append("--rgb-only")
     if args.mono_only:
         cmd.append("--mono-only")
+    if args.detector:
+        cmd.extend(["--detector", args.detector])
     if remaining_argv:
         cmd.extend(remaining_argv)
 
@@ -412,6 +414,8 @@ def main():
                         help="Show commands without executing")
     parser.add_argument("--no-build", action="store_true",
                         help="Skip build step")
+    parser.add_argument("--detector", choices=["yolov8", "rf-detr"], default=None,
+                        help="Detector model to use (default: from config file)")
 
     args, remaining_argv = parser.parse_known_args()
 
