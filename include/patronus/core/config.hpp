@@ -51,9 +51,9 @@ struct SensorConfig {
 
 /// @brief Command listener configuration for the UDP control channel.
 struct CommandConfig {
-  bool enabled_{false};        ///< Enable the UDP command listener.
+  bool enabled_{false};         ///< Enable the UDP command listener.
   std::string host_{"0.0.0.0"}; ///< Local address to bind to.
-  uint16_t port_{5002};        ///< UDP port to listen on for commands.
+  uint16_t port_{5002};         ///< UDP port to listen on for commands.
 };
 
 /// @brief Top-level system configuration.

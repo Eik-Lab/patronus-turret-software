@@ -42,7 +42,7 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   while (running.load()) {
     ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer) - 1, 0, nullptr, nullptr);
     if (n < 0)
-      continue; 
+      continue;
 
     buffer[n] = '\0';
     std::string command(buffer);
