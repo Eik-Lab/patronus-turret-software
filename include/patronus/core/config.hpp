@@ -49,6 +49,13 @@ struct SensorConfig {
   std::string baud_rate_{"B115200"}; ///< Baud rate string (e.g., "B9600", "B115200").
 };
 
+/// @brief Command listener configuration for the UDP control channel.
+struct CommandConfig {
+  bool enabled_{false};         ///< Enable the UDP command listener.
+  std::string command_host_;    ///< ip address to bind to.
+  uint16_t command_port_;       ///< UDP port to listen on for commands.
+};
+
 /// @brief Top-level system configuration.
 struct SystemConfig {
   std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
@@ -56,6 +63,7 @@ struct SystemConfig {
   PipelineConfig rgb_;                       ///< RGB pipeline config.
   PipelineConfig mono_;                      ///< Mono pipeline config.
   SensorConfig sensor_;                      ///< Sensor module config.
+  CommandConfig command_;                    ///< UDP command listener config.
   CanBusConfig can_bus_;                     ///< Shared CAN bus settings.
   std::vector<GimbalConfig> gimbals_;        ///< Per-gimbal CAN + limits.
   std::vector<TrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.
