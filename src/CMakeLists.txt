@@ -59,6 +59,7 @@ set(INFERENCE_SOURCES
     pipeline/inference_rgb.cpp
     tracking/aim_control.cpp
     comm/candle_motor.cpp
+    comm/command_listener.cpp
 )
 
 add_executable(inference ${INFERENCE_SOURCES})

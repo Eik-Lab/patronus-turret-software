@@ -1,4 +1,5 @@
 #include "patronus/comm/candle_motor.hpp"
+#include "patronus/comm/command_listener.hpp"
 #include "patronus/comm/sensor_module.hpp"
 #include "patronus/core/config.hpp"
 #include "patronus/core/state.hpp"
@@ -186,11 +187,19 @@ int main(int argc, char *argv[]) {
   std::thread rgb_thread;
   std::thread mono_thread;
   std::thread sensor_thread;
+  std::thread command_thread;
 
   // Sensor data reading thread
   if (cfg.sensor_.enabled_) {
     sensor_thread = std::thread([&]() {
       patronus::comm::runSensorThread(cfg.sensor_.port_, cfg.sensor_.baud_rate_, running);
+    });
+  }
+
+  // UDP command listener thread (e.g. "shoot" from the client console)
+  if (cfg.command_.enabled_) {
+    command_thread = std::thread([&]() {
+      patronus::comm::runCommandThread(cfg.command_.host_, cfg.command_.port_, running);
     });
   }
 
@@ -296,6 +305,8 @@ int main(int argc, char *argv[]) {
     mono_thread.join();
   if (sensor_thread.joinable())
     sensor_thread.join();
+  if (command_thread.joinable())
+    command_thread.join();
   for (auto &t : tracking_threads)
     if (t.joinable())
       t.join();
