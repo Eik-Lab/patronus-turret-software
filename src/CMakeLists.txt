@@ -24,10 +24,18 @@ set(CANDLESDK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CANDLESDK_BUILD_CANDLETOOL OFF CACHE BOOL "" FORCE)
 set(CANDLE_BUILD_STATIC ON CACHE BOOL "" FORCE)
 
+# CANdle-SDK first, deliberately. CMAKE_CXX_CLANG_TIDY is set below and applies to
+# every target created after it, so pulling in third-party code afterwards would
+# lint that code against our style rules -- it uses `fileRaw`/`resetClr` and
+# trips --warnings-as-errors, which fails the build for reasons unrelated to us.
+add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
+
 # clang-tidy integration
 # Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
 find_program(CLANG_TIDY NAMES clang-tidy)
-if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF")
+# Empty as well as "OFF": the top level normalises `-DCMAKE_CXX_CLANG_TIDY=OFF` to
+# the empty string before we get here, and re-enabling it would ignore the flag.
+if(CLANG_TIDY AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF" AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "")
   set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
     "--extra-arg=-std=c++17"
     "--extra-arg=-I${PROJECT_SOURCE_DIR}/include"
@@ -42,15 +50,15 @@ else()
   endif()
 endif()
 
-add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
-
 set(INFERENCE_SOURCES
     main.cpp
     core/config.cpp
     pipeline/inference.cpp
     tracking/aim_control.cpp
     tracking/target_filter.cpp
+    tracking/prediction_overlay.cpp
     comm/candle_motor.cpp
+    comm/sensor_module.cpp
     tools/motor_test.cpp
     tools/calibrate_focal.cpp
 )
@@ -75,7 +83,7 @@ target_link_directories(inference PRIVATE
 
 target_link_libraries(inference
     nvdsgst_meta
-    nv_meta
+    nvds_meta
     nvds_yml_parser
     nvdsgst_helper
     gstreamer-1.0
@@ -110,3 +118,21 @@ target_link_libraries(calibrate_home
     glib-2.0
     pthread
 )
+
+# --- Target filter tests ---
+# Deliberately standalone rather than a GTest target: the filter is the one piece
+# of this system whose correctness is not observable without cameras and a CAN
+# bus, so it needs its own executable that runs anywhere. No DeepStream, no
+# CANdle, no glib -- just the filter and the IMM.
+add_executable(test_target_filter
+    ../tests/test_target_filter.cpp
+    tracking/target_filter.cpp
+)
+
+target_include_directories(test_target_filter PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(test_target_filter PRIVATE kalman)
+
+add_test(NAME target_filter COMMAND test_target_filter)
