@@ -5,7 +5,9 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -26,19 +28,20 @@ int main(int argc, char *argv[]) {
 
   SystemConfig cfg = load_config(config_path);
 
+  // RAII: the motor destructor disables all motors on every exit path.
   patronus::comm::CandleMotor motor(cfg.gimbals_, cfg.can_bus_);
   if (!motor.init()) {
     std::fprintf(stderr, "calibrate-home: motor init failed\n");
     return 1;
   }
 
-  size_t first = (gimbal_arg >= 0) ? static_cast<size_t>(gimbal_arg) : 0;
-  size_t last = (gimbal_arg >= 0) ? static_cast<size_t>(gimbal_arg) + 1 : motor.gimbal_count();
+  const size_t first = (gimbal_arg >= 0) ? static_cast<size_t>(gimbal_arg) : 0;
+  const size_t last =
+    (gimbal_arg >= 0) ? static_cast<size_t>(gimbal_arg) + 1 : motor.gimbal_count();
 
   if (first >= motor.gimbal_count() || last > motor.gimbal_count()) {
     std::fprintf(stderr, "calibrate-home: gimbal %d not found (have %zu)\n", gimbal_arg,
                  motor.gimbal_count());
-    motor.disable();
     return 1;
   }
 
@@ -59,7 +62,7 @@ int main(int argc, char *argv[]) {
         auto [pp, pt] = motor.get_position(g);
         std::printf("\r  gimbal %zu  pan=%+.3f rad (%+.1f deg)  "
                     "tilt=%+.3f rad (%+.1f deg)  vel %+.3f %+.3f  ",
-                    g, pp, pp * 180.0 / 3.14159, pt, pt * 180.0 / 3.14159, pv, tv);
+                    g, pp, pp * 180.0 / M_PI, pt, pt * 180.0 / M_PI, pv, tv);
         std::fflush(stdout);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
@@ -81,11 +84,9 @@ int main(int argc, char *argv[]) {
       std::printf("Encoder will read 0 at this position on every boot.\n");
     } else {
       std::fprintf(stderr, "ERROR: calibrate_home(%zu) failed.\n", g);
-      motor.disable();
       return 1;
     }
   }
 
-  motor.disable();
   return 0;
 }

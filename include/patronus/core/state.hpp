@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 
@@ -15,12 +17,32 @@ struct Detection {
   float height_;     ///< Bounding-box height (pixels).
   int class_id_;     ///< Detection class (0 = drone).
   float confidence_; ///< Detection confidence [0, 1].
+
+  /// Capture time of the frame this detection came from, in seconds.
+  ///
+  /// Taken from the GStreamer buffer PTS, which DeepStream has already
+  /// converted to wall-clock nanoseconds. The target filter needs this: a
+  /// Kalman prediction is a function of dt, and the tracking loop is
+  /// event-driven, so "one loop iteration" is not a meaningful time step. The
+  /// cameras run at 30/40 fps while the loop ticks far faster, so assuming a
+  /// fixed dt would bias the velocity estimate badly during gimbals.
+  ///
+  /// 0.0 means the timestamp was unavailable (see Detection::valid_timestamp).
+  double timestamp_s_ = 0.0;
+
+  /// Monotonic frame counter, for diagnostics and duplicate detection.
+  uint64_t frame_id_ = 0;
+
+  /// True when timestamp_s_ carries a usable value.
+  [[nodiscard]] bool valid_timestamp() const noexcept {
+    return timestamp_s_ > 0.0;
+  }
 };
 
 /// @brief Thread-safe single-slot container for the most recent value.
 ///        Uses a mutex + condition variable so the consumer blocks until
 ///        a new value is available.
-///        Hot path: always use try_pop() with short timeouts — never wait() or pop().
+///        Hot path: always use try_pop() with a short timeout.
 template <typename T>
 class LatestValue {
 private:
@@ -38,17 +60,6 @@ public:
     cv_.notify_one();
   }
 
-  /// @brief Block until a value is available, consume it, and return it.
-  T pop() {
-    std::unique_lock<std::mutex> lock(mtx_);
-    cv_.wait(lock, [this]() {
-      return slot_.has_value();
-    });
-    T value = std::move(*slot_);
-    slot_.reset();
-    return value;
-  }
-
   /// @brief Wait up to `timeout` for a value; returns empty optional if none arrives.
   template <typename Rep, typename Period>
   std::optional<T> try_pop(const std::chrono::duration<Rep, Period> &timeout) {
@@ -60,6 +71,16 @@ public:
     T value = std::move(*slot_);
     slot_.reset();
     return value;
+  }
+
+  /// @brief Discard any pending value without waiting.
+  ///
+  /// Used when the consumer is about to change what it considers a fresh
+  /// sample, so that a queued value captured before the change is not mistaken
+  /// for one captured after it.
+  void clear() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    slot_.reset();
   }
 };
 

@@ -4,22 +4,29 @@
 #include "patronus/core/state.hpp"
 #include "patronus/pipeline/inference_mono.hpp"
 #include "patronus/pipeline/inference_rgb.hpp"
+#include "patronus/tools/calibrate_focal.hpp"
+#include "patronus/tools/motor_test.hpp"
 #include "patronus/tracking/aim_control.hpp"
+#include "patronus/tracking/target_filter.hpp"
 
 #include <glib.h>
 #include <gst/gst.h>
 
-#include <candlelib.hpp>
+#include <atomic>
 #include <chrono>
-#include <cmath>
 #include <csignal>
-#include <cstdio>
+#include <memory>
+#include <string>
 #include <thread>
+#include <vector>
 
 std::atomic<bool> running{true};
 
 static void signal_handler(int) {
   running = false;
+  // Unblock the GStreamer main loops so the pipeline threads can join.
+  patronus::pipeline::stop_pipeline_rgb();
+  patronus::pipeline::stop_pipeline_mono();
 }
 
 using patronus::config::load_config;
@@ -33,6 +40,7 @@ int main(int argc, char *argv[]) {
   gboolean rgb_only = FALSE;
   gboolean mono_only = FALSE;
   gboolean test_motors = FALSE;
+  gboolean calibrate_focal = FALSE;
 
   GOptionEntry entries[] = {
     {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config_path,
@@ -41,7 +49,10 @@ int main(int argc, char *argv[]) {
     {"mono-only", 'm', 0, G_OPTION_ARG_NONE, &mono_only, "Run mono pipeline only", nullptr},
     {"test-motors", 't', 0, G_OPTION_ARG_NONE, &test_motors,
      "Spin each motor briefly to verify CAN bus, then exit", nullptr},
-    {nullptr},
+    {"calibrate-focal", 0, 0, G_OPTION_ARG_NONE, &calibrate_focal,
+     "Slew each gimbal through known angles to measure the camera focal length, then exit",
+     nullptr},
+    {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr},
   };
 
   GOptionContext *ctx = g_option_context_new("- patronus inference system");
@@ -68,109 +79,8 @@ int main(int argc, char *argv[]) {
   std::signal(SIGINT, signal_handler);
 
   // ── --test-motors: standalone CAN bus test, no cameras needed ──────────────
-  if (test_motors) {
-    patronus::comm::CandleMotor motor(cfg.gimbals_, cfg.can_bus_);
-    if (!motor.init()) {
-      g_critical("CANDLE MOTOR TEST FAILED -- init()");
-      return 1;
-    }
-    g_print("CANDLE MOTOR TEST — %zu gimbal(s) enabled\n", motor.gimbal_count());
-
-    // Read gear ratio from motor firmware to convert motor-shaft → output
-    auto read_gear_ratio = [](mab::MD *md) -> float {
-      if (!md)
-        return 1.0F;
-      auto &reg = md->m_mdRegisters.motorGearRatio;
-      md->readRegister(reg);
-      float ratio = reg.value;
-      return (ratio > 0.0F) ? ratio : 1.0F;
-    };
-
-    for (size_t g = 0; g < motor.gimbal_count(); ++g) {
-      float pan_ratio = read_gear_ratio(motor.pan_motor(g));
-      float tilt_ratio = read_gear_ratio(motor.tilt_motor(g));
-      float tilt_limit = cfg.gimbals_[g].tilt_max_rad_;
-      g_print("  gimbal %zu: pan=MD%u tilt=MD%u  gear pan=%.1f:1  tilt=%.1f:1\n", g,
-              motor.pan_motor(g)->m_canId, motor.tilt_motor(g)->m_canId, pan_ratio, tilt_ratio);
-      g_print("  gimbal %zu: output range — pan ±60° (%.2f rad)  tilt ±%.0f° (%.4f rad)\n", g,
-              1.047, tilt_limit * 180.0 / M_PI, tilt_limit);
-    }
-
-    auto report_all = [&](const char *label) {
-      g_print("  [%s]\n", label);
-      for (size_t g = 0; g < motor.gimbal_count(); ++g) {
-        auto [ap, at] = motor.get_velocity(g);
-        auto [pp, pt] = motor.get_position(g);
-        float pan_ratio = read_gear_ratio(motor.pan_motor(g));
-        float tilt_ratio = read_gear_ratio(motor.tilt_motor(g));
-        float op = pp / pan_ratio;
-        float ot = pt / tilt_ratio;
-        g_print("    gimbal %zu  vel %+.3f %+.3f  motor %+.2f %+.2f  output %+.1f° %+.1f°\n", g, ap,
-                at, pp, pt, op * 180.0 / M_PI, ot * 180.0 / M_PI);
-      }
-    };
-
-    auto wait_home_all = [&](const char *label, int timeout_ms) {
-      g_print("--- %s ---\n", label);
-      auto start = std::chrono::steady_clock::now();
-      int count = 0;
-      for (;;) {
-        bool all_home = true;
-        for (size_t g = 0; g < motor.gimbal_count(); ++g) {
-          bool at_home = motor.return_to_home(g, 1.0F, 0.05F, 1.5F);
-          all_home = all_home && at_home;
-        }
-        if (++count % 5 == 0)
-          report_all("");
-        if (all_home)
-          break;
-        if (std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(timeout_ms)) {
-          g_print("  (timeout)\n");
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      report_all("at home");
-    };
-
-    // Lissajous figure-8: pan at ω, tilt at 2ω — traces a figure-8 pattern
-    auto lissajous = [&](const char *label, float amp, float omega, float freq_ratio,
-                         int duration_ms) {
-      g_print("--- %s ---\n", label);
-      auto start = std::chrono::steady_clock::now();
-      int count = 0;
-      while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(duration_ms)) {
-        float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count();
-        float pv = amp * std::cos(omega * t);
-        float tv = amp * std::cos(freq_ratio * omega * t);
-        for (size_t g = 0; g < motor.gimbal_count(); ++g)
-          motor.set_velocity(g, pv, tv);
-        if (++count % 10 == 0)
-          report_all("");
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-      for (size_t g = 0; g < motor.gimbal_count(); ++g)
-        motor.set_velocity(g, 0.0F, 0.0F);
-      report_all("at end of lissajous");
-    };
-
-    float sweep_speed = 0.5F;
-
-    // 1. Start at home
-    wait_home_all("return to home", 5000);
-
-    // 2. Lissajous figure-8 scan — 4 cycles (ω = 0.5 rad/s, cycle = 12.57 s)
-    //    Both axes move simultaneously: pan at ω, tilt at 2ω.
-    lissajous("figure-8 scan (4 cycles)", sweep_speed, 0.5F, 2.0F, 50000);
-
-    // 3. Final stop at home
-    for (size_t g = 0; g < motor.gimbal_count(); ++g)
-      motor.set_velocity(g, 0.0F, 0.0F);
-    report_all("test complete — at home");
-    motor.disable();
-    g_print("CANDLE MOTOR TEST PASSED\n");
-    return 0;
-  }
+  if (test_motors)
+    return patronus::tools::run_motor_test(cfg, running);
 
   // ── Normal inference + tracking mode ───────────────────────────────────────
 
@@ -183,25 +93,29 @@ int main(int argc, char *argv[]) {
   g_print("Patronus inference — mode=%s  tracking=%s  gimbals=%zu\n", cfg.mode_.c_str(),
           cfg.tracking_ ? "on" : "off", cfg.gimbals_.size());
 
+  // Which pipelines will actually run — gimbal threads must only consume
+  // queues that have a producer.
+  const bool rgb_active = cfg.mode_ != "mono" && cfg.rgb_.enabled_;
+  const bool mono_active = cfg.mode_ != "rgb" && cfg.mono_.enabled_;
+
   std::thread rgb_thread;
   std::thread mono_thread;
   std::thread sensor_thread;
 
-  // Sensor data reading thread
   if (cfg.sensor_.enabled_) {
-    sensor_thread = std::thread([&]() {
-      patronus::comm::runSensorThread(cfg.sensor_.port_, cfg.sensor_.baud_rate_, running);
+    sensor_thread = std::thread([&cfg]() {
+      patronus::comm::run_sensor_thread(cfg.sensor_.port_, cfg.sensor_.baud_rate_, running);
     });
   }
 
-  if (cfg.mode_ != "mono" && cfg.rgb_.enabled_) {
-    rgb_thread = std::thread([&]() {
+  if (rgb_active) {
+    rgb_thread = std::thread([&cfg]() {
       patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb);
     });
   }
 
-  if (cfg.mode_ != "rgb" && cfg.mono_.enabled_) {
-    mono_thread = std::thread([&]() {
+  if (mono_active) {
+    mono_thread = std::thread([&cfg]() {
       patronus::pipeline::run_pipeline_mono(cfg.mono_, detection_mono);
     });
   }
@@ -209,84 +123,183 @@ int main(int argc, char *argv[]) {
   // Tracking threads — one per gimbal, each consumes detections and drives motors.
   std::vector<std::thread> tracking_threads;
   std::shared_ptr<patronus::comm::CandleMotor> motor;
-  if (cfg.tracking_) {
+  // Focal calibration also needs the motor, but the two must not run at once:
+  // the calibration drives each gimbal to a sequence of known angles, and a
+  // tracking thread on the same gimbal would be commanding velocities
+  // underneath it, making the regression meaningless and the motion unsafe.
+  if (cfg.tracking_ || calibrate_focal) {
     motor = std::make_shared<patronus::comm::CandleMotor>(cfg.gimbals_, cfg.can_bus_);
     if (!motor->init()) {
       g_critical("Failed to initialise CANdle motor driver — tracking disabled");
       motor.reset();
-    } else {
+    } else if (!calibrate_focal) {
       for (size_t g = 0; g < motor->gimbal_count(); ++g) {
-        float tilt_limit = cfg.gimbals_[g].tilt_max_rad_;
         g_print("Tracking gimbal %zu started (max %.2f rad/s, tilt limit ±%.2f rad)\n", g,
-                cfg.gimbals_[g].max_velocity_rad_s_, tilt_limit);
+                cfg.gimbals_[g].max_velocity_rad_s_, cfg.gimbals_[g].tilt_max_rad_);
 
         // Each gimbal gets a copy of its tracking config and shared motor handle
-        auto trk = cfg.tracking_cfg_[g];
-        auto gimbal_cfg = cfg.gimbals_[g];
-        auto mode = cfg.mode_;
+        const auto trk = cfg.tracking_cfg_[g];
+        const auto gimbal_cfg = cfg.gimbals_[g];
 
-        tracking_threads.emplace_back([motor, g, trk, gimbal_cfg, mode]() {
-          // Pick the active detection queue — round-robin by gimbal index
-          auto *det = (g % 2 == 0) ? ((mode == "mono") ? &detection_mono : &detection_rgb)
-                                   : ((mode == "mono") ? &detection_rgb : &detection_mono);
+        // Round-robin across cameras; when only one pipeline is active, every
+        // gimbal reads from it. The pipeline a gimbal reads from is also the
+        // one whose geometry and focal lengths its filter must use, so select
+        // it once here and capture it by value.
+        const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
+        const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
 
-          // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no logging per frame.
-          enum class State { KTracking, KReturningHome, KAtHome };
-          State state = State::KTracking;
+        tracking_threads.emplace_back([motor, g, trk, gimbal_cfg, pipe, use_rgb, rgb_active,
+                                       mono_active]() {
+          auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
+                                                  : (use_rgb ? &detection_rgb : &detection_mono);
+
+          patronus::tracking::TargetFilter filter(
+            trk, pipe.detection_width_, pipe.detection_height_, pipe.focal_x_px_, pipe.focal_y_px_);
+
+          const patronus::tracking::SensorControlGains gains{
+            .kp_ = trk.kp_, .kd_ = trk.kd_, .lead_gain_ = trk.lead_gain_};
+
+          if (trk.filter_enabled_ && !filter.ego_compensation_active()) {
+            g_print("Tracking gimbal %zu: ego-motion compensation OFF "
+                    "(focal_x_px/focal_y_px unset). Velocity terms will include "
+                    "self-motion; run --calibrate-focal to enable.\n",
+                    g);
+          }
+
+          // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no
+          // logging per frame.
+          enum class State { Tracking, ReturningHome, AtHome };
+          State state = State::Tracking;
           auto last_detection = std::chrono::steady_clock::now();
 
+          // A track is treated as lost once the filter has coasted this
+          // long without accepting a measurement. Bounded so that a
+          // detection stream which is present but entirely inconsistent
+          // with the current estimate (a false positive, or a target that
+          // jumped) cannot keep a stale estimate driving the motor
+          // indefinitely. Slightly longer than the filter's own
+          // re-acquisition window so a brief occlusion is ridden out.
+          const auto stale_after = std::chrono::milliseconds(trk.filter_tick_ms_) * 45;
+
+          // The filter's gimbal-angle history and the tick are both stamped
+          // on this thread's own steady clock, so the two can be compared
+          // directly without mapping between clock domains.
+          const auto t0 = std::chrono::steady_clock::now();
+          auto last_tick = t0;
+          const auto tick = std::chrono::milliseconds(trk.filter_tick_ms_);
+
           while (running) {
-            auto opt = det->try_pop(std::chrono::milliseconds(10));
+            const auto now = std::chrono::steady_clock::now();
+            const double t_s = std::chrono::duration<double>(now - t0).count();
+            const float dt_s = std::chrono::duration<float>(now - last_tick).count();
 
+            // Record the encoder angle before stepping, so the filter can
+            // look up the pose that was current when a frame was captured.
+            const auto pos = motor->get_position(g);
+            filter.push_gimbal_sample(t_s, pos.first, pos.second);
+
+            const auto opt = det->try_pop(tick);
             if (opt.has_value()) {
-              state = State::KTracking;
-              last_detection = std::chrono::steady_clock::now();
+              state = State::Tracking;
+              last_detection = now;
+            }
 
-              patronus::core::Detection d = *opt;
-              patronus::core::Point center{d.left_ + d.width_ / 2.0F, d.top_ + d.height_ / 2.0F};
+            // True when we have something trustworthy to aim at.
+            bool aiming = false;
 
-              auto err = patronus::tracking::compute_control_sensor(center, 0.006F);
-
-              float pan_vel = err.pan_ * gimbal_cfg.max_velocity_rad_s_;
-              float tilt_vel = err.tilt_ * gimbal_cfg.max_velocity_rad_s_;
-
-              motor->set_velocity(g, pan_vel, tilt_vel);
-            } else {
-              switch (state) {
-                case State::KTracking: {
-                  if (trk.home_return_enabled_) {
-                    auto elapsed = std::chrono::steady_clock::now() - last_detection;
-                    if (elapsed >= std::chrono::milliseconds(trk.home_return_delay_ms_)) {
-                      state = State::KReturningHome;
-                      g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
-                    } else {
-                      motor->set_velocity(g, 0.0F, 0.0F);
-                    }
-                  } else {
-                    motor->set_velocity(g, 0.0F, 0.0F);
-                  }
-                  break;
-                }
-                case State::KReturningHome: {
-                  bool at_home =
-                    motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
-                                          trk.home_return_max_velocity_);
-                  if (at_home) {
-                    state = State::KAtHome;
-                    motor->set_velocity(g, 0.0F, 0.0F);
-                    g_print("Tracking gimbal %zu: at home position\n", g);
-                  }
-                  break;
-                }
-                case State::KAtHome: {
-                  motor->set_velocity(g, 0.0F, 0.0F);
-                  break;
-                }
+            if (trk.filter_enabled_) {
+              // Predict every tick whether or not a detection arrived; that
+              // is what lets the gimbal keep tracking between fixes.
+              const auto est = filter.step(dt_s, opt, t_s);
+              // coast_ticks() counts ticks since the last accepted
+              // measurement, so a rising value means the gate is rejecting
+              // everything and the estimate is extrapolating.
+              const bool fresh = now - last_detection < stale_after;
+              aiming = est.has_value() && fresh;
+              if (aiming) {
+                const patronus::core::Point error{est->error_u_px(), est->error_v_px()};
+                const patronus::core::Point velocity{est->vu(), est->vv()};
+                const auto cmd = patronus::tracking::compute_control_sensor(error, velocity, gains);
+                motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                    cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
               }
+            } else if (opt.has_value()) {
+              // Filter disabled: drive straight off the raw detection.
+              const patronus::core::Detection d = *opt;
+              const patronus::core::Point center{d.left_ + (d.width_ / 2.0F),
+                                                 d.top_ + (d.height_ / 2.0F)};
+              const auto error = patronus::tracking::detection_error(center, pipe.detection_width_,
+                                                                     pipe.detection_height_);
+              const auto cmd = patronus::tracking::compute_control_sensor(
+                error, patronus::core::Point{0.0F, 0.0F}, gains);
+              motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                  cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+              aiming = true;
+            }
+
+            last_tick = now;
+
+            if (aiming) {
+              continue;
+            }
+
+            // Not aiming. Re-enter Tracking as soon as a raw detection
+            // arrives, even if it has not yet been accepted by the filter,
+            // so the state machine cannot latch into ReturningHome while a
+            // target is plainly visible.
+            if (opt.has_value() && state == State::ReturningHome) {
+              state = State::Tracking;
+            }
+
+            if (state == State::ReturningHome) {
+              if (motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
+                                        trk.home_return_max_velocity_)) {
+                state = State::AtHome;
+                motor->set_velocity(g, 0.0F, 0.0F);
+                g_print("Tracking gimbal %zu: at home position\n", g);
+              }
+              continue;
+            }
+
+            // Hold position; start the home return once the delay expires.
+            motor->set_velocity(g, 0.0F, 0.0F);
+            if (state == State::Tracking && trk.home_return_enabled_ &&
+                now - last_detection >= std::chrono::milliseconds(trk.home_return_delay_ms_)) {
+              state = State::ReturningHome;
+              g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
             }
           }
+
+          // Never leave a gimbal commanded on thread exit.
+          motor->set_velocity(g, 0.0F, 0.0F);
         });
       }
+    }
+  }
+
+  // ── --calibrate-focal: measure fx/fy from known gimbal angles ─────────────
+  // Runs alongside the live pipelines, because the only source of detections is
+  // the perception stack. A separate calibration binary would have to open the
+  // cameras a second time, which the Basler sources will not allow.
+  if (calibrate_focal) {
+    g_print("\nFocal calibration — pointing the camera at a high-contrast target is required.\n");
+    if (!motor) {
+      g_critical("Focal calibration needs the motor driver, which failed to initialise");
+      running = false;
+    } else {
+      for (size_t g = 0; g < motor->gimbal_count() && running; ++g) {
+        const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
+        const auto &pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
+        auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
+                                                : (use_rgb ? &detection_rgb : &detection_mono);
+        const int rc = patronus::tools::run_focal_calibration(
+          *motor, g, cfg.gimbals_[g], *det, pipe.detection_width_, pipe.detection_height_,
+          pipe.focal_x_px_, pipe.focal_y_px_, running);
+        if (rc != 0) {
+          g_printerr("Gimbal %zu: focal calibration failed\n", g);
+        }
+      }
+      running = false; // always stop the pipelines and exit afterwards
     }
   }
 
@@ -300,9 +313,6 @@ int main(int argc, char *argv[]) {
     if (t.joinable())
       t.join();
 
-  // Disable motors on exit (SIGTERM/SIGINT or normal termination)
-  if (motor)
-    motor->disable();
-
+  // Motor destructor (RAII) disables all motors on every exit path.
   return 0;
 }
