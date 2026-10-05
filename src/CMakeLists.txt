@@ -1,3 +1,4 @@
+# Target architecture from the compiler triple (aarch64 = Jetson, x86_64 = dGPU)
 execute_process(COMMAND gcc -dumpmachine
     OUTPUT_VARIABLE LINUX_ARCH_FULL
     OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -8,11 +9,10 @@ set(CUDA_VER 13.0)
 
 message("-- DeepStream Version: ${DS_VERSION}")
 message("-- CUDA Version: ${CUDA_VER}")
-message("-- COMPILE_TO_ARCH: ${LINUX_ARCH}")
+message("-- Architecture: ${LINUX_ARCH}")
 
 if("${LINUX_ARCH}" STREQUAL "aarch64")
     message("-- aarch64 Jetson TEGRA")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPLATFORM_TEGRA")
 elseif("${LINUX_ARCH}" STREQUAL "x86_64")
     message("-- X86 dGPU")
 endif()
@@ -44,21 +44,15 @@ endif()
 
 add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
 
-set(COMMON_LIBS
-    -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
-    -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
-    -lcudart -lcuda
-    -lpthread
-    candle
-)
-
 set(INFERENCE_SOURCES
     main.cpp
     core/config.cpp
-    pipeline/inference_mono.cpp
-    pipeline/inference_rgb.cpp
+    pipeline/inference.cpp
     tracking/aim_control.cpp
+    tracking/target_filter.cpp
     comm/candle_motor.cpp
+    tools/motor_test.cpp
+    tools/calibrate_focal.cpp
 )
 
 add_executable(inference ${INFERENCE_SOURCES})
@@ -79,16 +73,27 @@ target_link_directories(inference PRIVATE
     /usr/lib/${LINUX_ARCH}-linux-gnu/gstreamer-1.0
 )
 
-target_link_libraries(inference ${COMMON_LIBS})
+target_link_libraries(inference
+    nvdsgst_meta
+    nv_meta
+    nvds_yml_parser
+    nvdsgst_helper
+    gstreamer-1.0
+    glib-2.0
+    gobject-2.0
+    cudart
+    cuda
+    pthread
+    candle
+    kalman
+)
 
 # --- Home calibration tool ---
-set(CALIBRATE_HOME_SOURCES
+add_executable(calibrate_home
     tools/calibrate_home.cpp
     core/config.cpp
     comm/candle_motor.cpp
 )
-
-add_executable(calibrate_home ${CALIBRATE_HOME_SOURCES})
 
 target_include_directories(calibrate_home PRIVATE
     ${PROJECT_SOURCE_DIR}/include
