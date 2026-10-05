@@ -8,6 +8,25 @@
 
 namespace patronus::core {
 
+/// @brief Seconds on a process-wide monotonic epoch shared by every thread.
+///
+/// `std::chrono::steady_clock` is CLOCK_MONOTONIC on Linux, so it is already
+/// consistent between threads. This gives all of them the same *origin*, which
+/// is the part that is otherwise missing: a tracking thread that started its own
+/// clock at thread launch produces timestamps that no other thread can compare
+/// against its own `now()`.
+///
+/// Both ends of the prediction path depend on this agreeing. The pipeline stamps
+/// `Detection::timestamp_s_` from here, the tracking loop stamps the filter's
+/// tick from here, and the overlay compares publish times from here. Any
+/// divergence shows up as a filter fed a negative or wildly large `dt`.
+///
+/// @return Seconds since the first call on any thread. Never negative.
+[[nodiscard]] inline double steady_now_s() {
+  static const std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - epoch).count();
+}
+
 /// @brief Lightweight detection result extracted from NvDsObjectMeta.
 ///        POD type — safe to copy across threads without dangling pointers.
 struct Detection {
@@ -20,12 +39,16 @@ struct Detection {
 
   /// Capture time of the frame this detection came from, in seconds.
   ///
-  /// Taken from the GStreamer buffer PTS, which DeepStream has already
-  /// converted to wall-clock nanoseconds. The target filter needs this: a
-  /// Kalman prediction is a function of dt, and the tracking loop is
-  /// event-driven, so "one loop iteration" is not a meaningful time step. The
-  /// cameras run at 30/40 fps while the loop ticks far faster, so assuming a
-  /// fixed dt would bias the velocity estimate badly during gimbals.
+  /// Stamped with `patronus::core::steady_now_s()` by the pipeline thread. The
+  /// target filter needs this: a Kalman prediction is a function of dt, and the
+  /// tracking loop is event-driven, so "one loop iteration" is not a meaningful
+  /// time step. The cameras run at 30/40 fps while the loop ticks far faster, so
+  /// assuming a fixed dt would bias the velocity estimate badly during gimbals.
+  ///
+  /// Not the GStreamer buffer PTS directly: PTS is wall-clock, and the filter's
+  /// tick and encoder history are on the steady clock, so those two cannot be
+  /// subtracted. Using one process-wide monotonic epoch for both is what makes
+  /// the latency compensation possible at all.
   ///
   /// 0.0 means the timestamp was unavailable (see Detection::valid_timestamp).
   double timestamp_s_ = 0.0;

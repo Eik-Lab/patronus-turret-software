@@ -21,7 +21,13 @@
 # SOFTWARE.
 
 .vscode/
+# `tests/` was ignored by the vendored NVIDIA DeepStream gitignore above, but
+# src/CMakeLists.txt registers tests/test_target_filter.cpp as a ctest target,
+# so the file has to be tracked or a clean checkout cannot configure. Un-exclude
+# the directory itself -- git cannot re-include a file whose parent directory is
+# excluded, so `!tests/test_target_filter.cpp` alone would not work.
 tests/
+!tests/
 src/build/
 **/*.mp4
 **/*.h264
