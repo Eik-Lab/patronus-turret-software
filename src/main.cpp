@@ -7,6 +7,7 @@
 #include "patronus/tools/calibrate_focal.hpp"
 #include "patronus/tools/motor_test.hpp"
 #include "patronus/tracking/aim_control.hpp"
+#include "patronus/tracking/prediction_overlay.hpp"
 #include "patronus/tracking/target_filter.hpp"
 
 #include <glib.h>
@@ -34,6 +35,13 @@ using patronus::config::SystemConfig;
 
 static patronus::core::LatestValue<patronus::core::Detection> detection_rgb;
 static patronus::core::LatestValue<patronus::core::Detection> detection_mono;
+
+// One channel per camera. The tracking threads for the gimbals that read a
+// given camera publish into that camera's channel, and that camera's OSD probe
+// draws them. Keeping them separate is what lets the round-robin in the loop
+// below hand out gimbals without two threads fighting over one slot.
+static patronus::tracking::PredictionChannel predictions_rgb;
+static patronus::tracking::PredictionChannel predictions_mono;
 
 int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
@@ -110,13 +118,13 @@ int main(int argc, char *argv[]) {
 
   if (rgb_active) {
     rgb_thread = std::thread([&cfg]() {
-      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb);
+      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb, predictions_rgb);
     });
   }
 
   if (mono_active) {
     mono_thread = std::thread([&cfg]() {
-      patronus::pipeline::run_pipeline_mono(cfg.mono_, detection_mono);
+      patronus::pipeline::run_pipeline_mono(cfg.mono_, detection_mono, predictions_mono);
     });
   }
 
@@ -147,9 +155,10 @@ int main(int argc, char *argv[]) {
         // it once here and capture it by value.
         const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
         const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
+        auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
 
         tracking_threads.emplace_back([motor, g, trk, gimbal_cfg, pipe, use_rgb, rgb_active,
-                                       mono_active]() {
+                                       mono_active, predictions]() {
           auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
                                                   : (use_rgb ? &detection_rgb : &detection_mono);
 
@@ -181,16 +190,28 @@ int main(int argc, char *argv[]) {
           // re-acquisition window so a brief occlusion is ridden out.
           const auto stale_after = std::chrono::milliseconds(trk.filter_tick_ms_) * 45;
 
-          // The filter's gimbal-angle history and the tick are both stamped
-          // on this thread's own steady clock, so the two can be compared
-          // directly without mapping between clock domains.
-          const auto t0 = std::chrono::steady_clock::now();
-          auto last_tick = t0;
+          // The filter's gimbal-angle history, its tick, and the timestamps the
+          // pipeline stamps on each detection all come from steady_now_s(), a
+          // single process-wide monotonic epoch. They can be subtracted directly,
+          // which is the whole reason the filter can compensate for pipeline
+          // latency at all.
+          auto last_tick = std::chrono::steady_clock::now();
           const auto tick = std::chrono::milliseconds(trk.filter_tick_ms_);
+
+          // Normalisation factors for the overlay. Publishing normalised
+          // coordinates keeps the video thread from having to know the detection
+          // pixel space, which is not the muxed space and not the network input.
+          const float det_w =
+            (pipe.detection_width_ > 0U) ? static_cast<float>(pipe.detection_width_) : 1.0F;
+          const float det_h =
+            (pipe.detection_height_ > 0U) ? static_cast<float>(pipe.detection_height_) : 1.0F;
+          const float half_w = det_w * 0.5F;
+          const float half_h = det_h * 0.5F;
+          const float lead_s = pipe.prediction_lead_s_;
 
           while (running) {
             const auto now = std::chrono::steady_clock::now();
-            const double t_s = std::chrono::duration<double>(now - t0).count();
+            const double t_s = patronus::core::steady_now_s();
             const float dt_s = std::chrono::duration<float>(now - last_tick).count();
 
             // Record the encoder angle before stepping, so the filter can
@@ -211,6 +232,29 @@ int main(int argc, char *argv[]) {
               // Predict every tick whether or not a detection arrived; that
               // is what lets the gimbal keep tracking between fixes.
               const auto est = filter.step(dt_s, opt, t_s);
+
+              // Publish for the overlay whenever there is an estimate, not only
+              // when we are aiming. A coasting prediction is exactly what an
+              // operator wants to see during an occlusion; suppressing it would
+              // hide the one moment the filter is interesting.
+              if (est.has_value()) {
+                patronus::tracking::PredictionSample sample;
+                sample.publish_t_s = t_s;
+                sample.u_norm = (est->error_u_px() + half_w) / det_w;
+                sample.v_norm = (est->error_v_px() + half_h) / det_h;
+                const auto lead = est->predicted_error(lead_s);
+                sample.lead_u_norm = (lead.cx_ + half_w) / det_w;
+                sample.lead_v_norm = (lead.cy_ + half_h) / det_h;
+                sample.vu_norm_s = est->vu() / det_w;
+                sample.vv_norm_s = est->vv() / det_h;
+                sample.box_w_norm = est->box_w_px() / det_w;
+                sample.box_h_norm = est->box_h_px() / det_h;
+                sample.sigma_norm = std::max(est->sigma_u_px(), est->sigma_v_px()) / det_w;
+                sample.coast_ticks = est->coast_ticks();
+                sample.measured = est->measured();
+                predictions->publish(g, sample);
+              }
+
               // coast_ticks() counts ticks since the last accepted
               // measurement, so a rising value means the gate is rejecting
               // everything and the estimate is extrapolating.
@@ -270,8 +314,10 @@ int main(int argc, char *argv[]) {
             }
           }
 
-          // Never leave a gimbal commanded on thread exit.
+          // Never leave a gimbal commanded on thread exit, and stop drawing a
+          // prediction nothing is maintaining any more.
           motor->set_velocity(g, 0.0F, 0.0F);
+          predictions->clear(g);
         });
       }
     }

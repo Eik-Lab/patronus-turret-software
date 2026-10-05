@@ -72,6 +72,10 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
     cfg.detection_width_ = 1920U;
   if (cfg.detection_height_ == 0U)
     cfg.detection_height_ = 1088U;
+  cfg.draw_predictions_ = read_bool(kf, group, "draw_predictions", true);
+  cfg.prediction_lead_s_ = read_float(kf, group, "prediction_lead_s", 0.15F);
+  if (!(cfg.prediction_lead_s_ > 0.0F))
+    cfg.prediction_lead_s_ = 0.15F;
   return cfg;
 }
 

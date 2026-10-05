@@ -50,6 +50,22 @@ struct PipelineConfig {
   /// gimbal motion as target manoeuvre).
   float focal_x_px_{0.0f}; ///< Horizontal focal length, pixels.
   float focal_y_px_{0.0f}; ///< Vertical focal length, pixels.
+
+  /// Draw the IMM filter's prediction on the video overlay.
+  ///
+  /// The overlay is drawn by the video thread from predictions published by the
+  /// tracking threads, so it keeps working (and coasting) while detections are
+  /// rejected or absent — which is exactly when it is worth watching. Purely
+  /// cosmetic: turning it off does not change what the motors are commanded.
+  bool draw_predictions_{true};
+
+  /// Look-ahead horizon for the drawn prediction vector, seconds.
+  ///
+  /// This is a *visualisation* horizon, chosen to be visible at the frame rates
+  /// involved. It is deliberately independent of the per-gimbal `lead_gain`,
+  /// which is a control-law parameter: tuning one must not silently redraw the
+  /// other.
+  float prediction_lead_s_{0.15f};
 };
 
 /// @brief CAN bus configuration for a single gimbal.
