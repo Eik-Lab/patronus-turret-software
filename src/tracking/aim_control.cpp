@@ -10,25 +10,37 @@ static constexpr float k_weapon_dx = 67.0F;
 static constexpr float k_weapon_dy = -34.0F;
 static constexpr float k_weapon_dz = 0.0F;
 
-// Sensor-frame pixel centre (half of 1920x1080).
-static constexpr float k_frame_cx = 1920.0F / 2.0F;
-static constexpr float k_frame_cy = 1080.0F / 2.0F;
+// Sensor-frame pixel centre. There is deliberately no hardcoded frame geometry
+// here: the detection pixel space and the aim error space are both supplied by
+// the caller (see detection_error), so the two cannot drift apart.
+core::Point detection_error(core::Point center, uint32_t frame_w, uint32_t frame_h) {
+  const float half_w = static_cast<float>(frame_w) * 0.5F;
+  const float half_h = static_cast<float>(frame_h) * 0.5F;
+  return core::Point{center.cx_ - half_w, center.cy_ - half_h};
+}
 
-// HOT PATH: called every frame (~100 Hz). Keep branch-free, no allocs.
-// Normalise pixel error to [-1, 1] range; centre = zero.
-core::AimAngles compute_control_sensor(core::Point center, float Kp) {
-  float pan = Kp * (center.cx_ - k_frame_cx);
-  float tilt = Kp * (center.cy_ - k_frame_cy);
+// HOT PATH: called every tick (~100 Hz). Keep branch-free, no allocs, no logging.
+// The P term tracks position, the D term damps, and the lead term predicts
+// where the target will be when the gimbal finishes slewing. All three are
+// normalised to [-1, 1] here and scaled to rad/s by the caller.
+core::AimAngles compute_control_sensor(core::Point error_px, core::Point velocity_px_s,
+                                       const SensorControlGains &gains) {
+  const float pan = (gains.kp_ * error_px.cx_) + (gains.kd_ * velocity_px_s.cx_) +
+                    (gains.lead_gain_ * (gains.kp_ * velocity_px_s.cx_));
 
-  pan = std::clamp(pan, -1.0F, 1.0F);
-  tilt = std::clamp(tilt, -1.0F, 1.0F);
+  const float tilt = (gains.kp_ * error_px.cy_) + (gains.kd_ * velocity_px_s.cy_) +
+                     (gains.lead_gain_ * (gains.kp_ * velocity_px_s.cy_));
 
-  if (std::abs(pan) < 0.01F)
-    pan = 0.0F;
-  if (std::abs(tilt) < 0.01F)
-    tilt = 0.0F;
+  core::AimAngles cmd{};
+  cmd.pan_ = std::clamp(pan, -1.0F, 1.0F);
+  cmd.tilt_ = std::clamp(tilt, -1.0F, 1.0F);
 
-  return {.pan_ = pan, .tilt_ = tilt};
+  if (std::abs(cmd.pan_) < gains.deadband_)
+    cmd.pan_ = 0.0F;
+  if (std::abs(cmd.tilt_) < gains.deadband_)
+    cmd.tilt_ = 0.0F;
+
+  return cmd;
 }
 
 // Project sensor aim vector onto the weapon bore axis, compensating for
@@ -45,8 +57,9 @@ core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, floa
   float vy = ty - k_weapon_dy;
   float vz = tz - k_weapon_dz;
 
-  float pan = std::atan2(vy, vx) * (180.0F / static_cast<float>(M_PI));
-  float tilt = std::atan2(vz, std::sqrt(vx * vx + vy * vy)) * (180.0F / static_cast<float>(M_PI));
+  const float rad_to_deg = 180.0F / static_cast<float>(M_PI);
+  float pan = std::atan2(vy, vx) * rad_to_deg;
+  float tilt = std::atan2(vz, std::sqrt((vx * vx) + (vy * vy))) * rad_to_deg;
 
   return {.pan_ = pan, .tilt_ = tilt};
 }
