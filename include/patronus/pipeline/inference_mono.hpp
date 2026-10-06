@@ -17,4 +17,10 @@ int run_pipeline_mono(const patronus::config::PipelineConfig &config,
 ///        Safe to call from a signal handler (only touches a file-scope pointer).
 void stop_pipeline_mono();
 
+/// @brief Change the mono camera's exposure time by a relative amount.
+/// @param delta_us Change in microseconds; negative values shorten the exposure.
+/// @note Does nothing if the mono pipeline is not running. Has no lasting effect while the
+///       camera's ExposureAuto is enabled.
+void adjust_exposure_mono(double delta_us);
+
 } // namespace patronus::pipeline

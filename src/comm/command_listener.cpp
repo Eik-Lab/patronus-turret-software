@@ -1,5 +1,8 @@
 #include "patronus/comm/command_listener.hpp"
 
+#include "patronus/pipeline/inference_mono.hpp"
+#include "patronus/pipeline/inference_rgb.hpp"
+
 #include <glib.h>
 
 #include <arpa/inet.h>
@@ -11,6 +14,29 @@
 
 namespace patronus::comm {
 
+namespace {
+
+// Exposure time change per inc_exp:<camera> / dec_exp:<camera> command, in microseconds.
+constexpr double exposure_step_us = 50.0;
+
+void adjust_exposure(const std::string &camera, double delta_us) {
+  if (camera == "1") {
+    patronus::pipeline::adjust_exposure_rgb(delta_us);
+  } else {
+    patronus::pipeline::adjust_exposure_mono(delta_us);
+  }
+}
+
+void decrease_exposure(const std::string &camera) {
+  adjust_exposure(camera, -exposure_step_us);
+}
+
+void increase_exposure(const std::string &camera) {
+  adjust_exposure(camera, exposure_step_us);
+}
+
+} // namespace
+
 void handleShoot() {
   // send command to arduino, needs to initilize serial port. 
 /*   "safety-on": skru på safety
@@ -19,16 +45,6 @@ void handleShoot() {
 "hold": stopp å skyt */
   g_print("SHOOT\n");
 
-}
-
-void decrease_exposure(){
-  int value = camera.ExposureMode.GetValue();
-  camera.ExposureMode.setValue(value-50)
-}
-
-void increase_exposure(){
-  int value = camera.ExposureMode.GetValue();
-  camera.ExposureMode.setValue(value+50)
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -63,14 +79,19 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
     buffer[n] = '\0';
     std::string command(buffer);
 
+    // Commands may carry an argument after a colon, e.g. "inc_exp:1".
+    const std::string::size_type colon = command.find(':');
+    const std::string name = command.substr(0, colon);
+    const std::string argument = (colon == std::string::npos) ? "" : command.substr(colon + 1);
+
     if (command == "shoot") {
       handleShoot();
     }
-    else if (command == "inc_exp"){
-      increase_expoure();
+    else if (name == "inc_exp"){
+      increase_exposure(argument);
     }
-    else if (command == "dec_exp"){
-      decrease_exposure();
+    else if (name == "dec_exp"){
+      decrease_exposure(argument);
     } 
     else {
       g_print(":CommandListener: Received command: %s\n", command.c_str());
