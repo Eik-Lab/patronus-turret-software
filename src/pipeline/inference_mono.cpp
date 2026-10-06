@@ -41,6 +41,7 @@ namespace patronus::pipeline {
 
 static patronus::core::LatestValue<patronus::core::Detection> *g_output_mono = nullptr;
 static GMainLoop *g_loop_mono = nullptr;
+static GstElement *g_source_mono = nullptr;
 
 // OSD probe: overlay drone count on video and forward detections to tracking.
 static GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info,
@@ -279,12 +280,14 @@ int run_pipeline_mono(const patronus::config::PipelineConfig &config,
   gst_object_unref(osd_sink_pad);
 
   g_print("Using pylonsrc (Basler camera serial %s)\n", config.camera_serial_.c_str());
+  g_source_mono = source;
   gst_element_set_state(pipeline, GST_STATE_PLAYING);
 
   g_print("Running...\n");
   g_main_loop_run(loop);
 
   g_print("Returned, stopping playback\n");
+  g_source_mono = nullptr;
   gst_element_set_state(pipeline, GST_STATE_NULL);
   g_print("Deleting pipeline\n");
   gst_object_unref(GST_OBJECT(pipeline));
@@ -297,6 +300,16 @@ int run_pipeline_mono(const patronus::config::PipelineConfig &config,
 void stop_pipeline_mono() {
   if (g_loop_mono)
     g_main_loop_quit(g_loop_mono);
+}
+
+void adjust_exposure_mono(double delta_us) {
+  if (!g_source_mono)
+    return;
+  // pylonsrc maps the camera's pylon features to "cam::" child properties.
+  GstChildProxy *camera = GST_CHILD_PROXY(g_source_mono);
+  gdouble exposure_us = 0.0;
+  gst_child_proxy_get(camera, "cam::ExposureTime", &exposure_us, NULL);
+  gst_child_proxy_set(camera, "cam::ExposureTime", exposure_us + delta_us, NULL);
 }
 
 } // namespace patronus::pipeline
