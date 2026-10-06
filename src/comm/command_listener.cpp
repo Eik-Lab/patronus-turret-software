@@ -16,35 +16,34 @@ namespace patronus::comm {
 
 namespace {
 
-// Exposure time change per inc_exp:<camera> / dec_exp:<camera> command, in microseconds.
-constexpr double exposure_step_us = 50.0;
+  // Exposure time change per inc_exp:<camera> / dec_exp:<camera> command, in microseconds.
+  constexpr double exposure_step_us = 50.0;
 
-void adjust_exposure(const std::string &camera, double delta_us) {
-  if (camera == "1") {
-    patronus::pipeline::adjust_exposure_rgb(delta_us);
-  } else {
-    patronus::pipeline::adjust_exposure_mono(delta_us);
+  void adjust_exposure(const std::string &camera, double delta_us) {
+    if (camera == "1") {
+      patronus::pipeline::adjust_exposure_rgb(delta_us);
+    } else {
+      patronus::pipeline::adjust_exposure_mono(delta_us);
+    }
   }
-}
 
-void decrease_exposure(const std::string &camera) {
-  adjust_exposure(camera, -exposure_step_us);
-}
+  void decrease_exposure(const std::string &camera) {
+    adjust_exposure(camera, -exposure_step_us);
+  }
 
-void increase_exposure(const std::string &camera) {
-  adjust_exposure(camera, exposure_step_us);
-}
+  void increase_exposure(const std::string &camera) {
+    adjust_exposure(camera, exposure_step_us);
+  }
 
 } // namespace
 
 void handleShoot() {
-  // send command to arduino, needs to initilize serial port. 
-/*   "safety-on": skru på safety
-"safety-off": skru av safety
-"fire": begynn å skyt
-"hold": stopp å skyt */
+  // send command to arduino, needs to initilize serial port.
+  /*   "safety-on": skru på safety
+  "safety-off": skru av safety
+  "fire": begynn å skyt
+  "hold": stopp å skyt */
   g_print("SHOOT\n");
-
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -86,14 +85,11 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
 
     if (command == "shoot") {
       handleShoot();
-    }
-    else if (name == "inc_exp"){
+    } else if (name == "inc_exp") {
       increase_exposure(argument);
-    }
-    else if (name == "dec_exp"){
+    } else if (name == "dec_exp") {
       decrease_exposure(argument);
-    } 
-    else {
+    } else {
       g_print(":CommandListener: Received command: %s\n", command.c_str());
     }
   }
@@ -102,9 +98,4 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   g_print(":CommandListener: Stopped\n");
 }
 
-} 
-
-
-
-
- 
+} // namespace patronus::comm
