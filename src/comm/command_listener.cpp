@@ -12,7 +12,23 @@
 namespace patronus::comm {
 
 void handleShoot() {
+  // send command to arduino, needs to initilize serial port. 
+/*   "safety-on": skru på safety
+"safety-off": skru av safety
+"fire": begynn å skyt
+"hold": stopp å skyt */
   g_print("SHOOT\n");
+
+}
+
+void decrease_exposure(){
+  int value = camera.ExposureMode.GetValue();
+  camera.ExposureMode.setValue(value-50)
+}
+
+void increase_exposure(){
+  int value = camera.ExposureMode.GetValue();
+  camera.ExposureMode.setValue(value+50)
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -49,7 +65,14 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
 
     if (command == "shoot") {
       handleShoot();
-    } else {
+    }
+    else if (command == "inc_exp"){
+      increase_expoure();
+    }
+    else if (command == "dec_exp"){
+      decrease_exposure();
+    } 
+    else {
       g_print(":CommandListener: Received command: %s\n", command.c_str());
     }
   }
@@ -58,4 +81,9 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   g_print(":CommandListener: Stopped\n");
 }
 
-} // namespace patronus::comm
+} 
+
+
+
+
+ 
