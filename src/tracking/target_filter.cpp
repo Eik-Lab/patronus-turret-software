@@ -3,31 +3,26 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <kalman/core/imm.hpp>
-#include <kalman/models/pixel.hpp>
+#include <kalman/tracker.hpp>
 #include <utility>
 
 namespace patronus::tracking {
 namespace {
-
-  // Constant velocity + constant acceleration. Deliberately excludes the CT
-  // (coordinated turn) model: its turn rate is unobservable from a linear
-  // position update, so `ImmFilter` would have to be handed a prior we have no
-  // way to measure here (no optical flow in this pipeline), leaving it pinned at
-  // zero and duplicating CV at three times the per-tick cost.
-  using ModelCv = kalman::ImmPixelModel<double, void>;
-  using ModelCa = kalman::ImmPixelModel<double, kalman::PixelCATag>;
-  using Imm = kalman::ImmFilter<double, ModelCv, ModelCa>;
 
   /// Encoder-angle history length. At the 10 ms default tick this spans 2.56 s,
   /// far beyond any plausible pipeline latency, so a lookup never runs out of
   /// bracketing samples. Fixed capacity: push_gimbal_sample() must not allocate.
   constexpr int k_angle_history = 256;
 
-  /// Fallback initial velocity variance, px^2/s^2. A target seen for the first
-  /// time may be moving at any speed; starting with a large velocity covariance
-  /// lets the first few updates converge in a tick or two instead of creeping.
-  constexpr double k_initial_velocity_var = 1.0e4;
+  /// Longest interval the model is advanced in one step, seconds. A stalled
+  /// pipeline must not inflate the covariance without limit in a single call.
+  constexpr double k_max_step_s = 0.25;
+
+  /// Longest capture-to-control extrapolation, seconds. Beyond this the
+  /// constant-acceleration model is no longer a prediction worth steering by.
+  constexpr double k_max_lead_s = 0.25;
+
+  constexpr float k_two_pi = 6.28318530717958647692F;
 
   struct GimbalSample {
     double t_s;
@@ -43,47 +38,75 @@ namespace {
 
 struct TargetFilter::Impl {
   // Configuration.
-  float meas_sigma_px{4.0F};
-  double qc{2000.0};
-  double gate{9.21};
-  int adapt_window{30};
+  float meas_sigma_px{8.0F};
+  float conf_noise_scale{10.0F};
   double latency_s{0.0};
+  double max_coast_s{1.0};
 
   // Geometry.
   float det_w_px{1.0F};
   float det_h_px{1.0F};
-  float focal_x{0.0F};
-  float focal_y{0.0F};
+  // Image shift per radian of encoder motion, sign included (kalman::Config
+  // convention). Panning right drags a world-static point left, hence -focal.
+  float pan_px_per_rad{0.0F};
+  float tilt_px_per_rad{0.0F};
   bool ego_active{false};
 
-  // Filter.
-  Imm imm;
+  // Filter. Works in aim-error pixels (detection centre minus frame centre).
+  kalman::Tracker tracker;
   bool initialized{false};
   double last_time_s{0.0};
+  double last_capture_s{0.0};
   int coast{0};
+  double coast_s{0.0};
 
-  // Ego-stabilised reference pose, captured when the filter is seeded. Chosen
-  // at seed time so the stabilised coordinate equals the raw aim error there.
-  float pan_ref_rad{0.0F};
-  float tilt_ref_rad{0.0F};
+  // Gimbal pose at the current and previous frame's capture.
+  bool have_frame_pose{false};
+  float frame_pan_rad{0.0F};
+  float frame_tilt_rad{0.0F};
+  // Camera-induced image velocity over the latest frame interval, px/s.
+  float camera_vu{0.0F};
+  float camera_vv{0.0F};
+  bool camera_compensated{false};
 
-  // Most recent accepted detection box, for overlay sizing.
+  // Most recent accepted detection.
   float box_w_px{0.0F};
   float box_h_px{0.0F};
+  core::Point detection_error_px{0.0F, 0.0F};
+  uint64_t detection_frame_id{0};
+
+  // Extrapolation to the control instant, kept for repeated observations.
+  float lead_horizon_s{0.0F};
+  core::Point lead_error{0.0F, 0.0F};
+  core::Point lead_velocity{0.0F, 0.0F};
 
   // Encoder-angle history ring buffer.
   std::array<GimbalSample, k_angle_history> history{};
   int history_head{0}; // next write index
   int history_count{0};
 
-  void reset() noexcept {
+  explicit Impl(const kalman::Config &kcfg) : tracker(kcfg) {
+  }
+
+  /// Forget the track but keep the encoder history and frame clock, so the next
+  /// detection re-seeds immediately.
+  void drop_track() noexcept {
     initialized = false;
     coast = 0;
-    last_time_s = 0.0;
-    history_head = 0;
-    history_count = 0;
+    coast_s = 0.0;
     box_w_px = 0.0F;
     box_h_px = 0.0F;
+    detection_error_px = core::Point{0.0F, 0.0F};
+    detection_frame_id = 0;
+  }
+
+  void reset() noexcept {
+    drop_track();
+    last_time_s = 0.0;
+    last_capture_s = 0.0;
+    have_frame_pose = false;
+    history_head = 0;
+    history_count = 0;
   }
 
   void push_angle(double t_s, float pan_rad, float tilt_rad) {
@@ -146,86 +169,113 @@ struct TargetFilter::Impl {
     return true;
   }
 
-  /// Detection-pixel aim error -> ego-stabilised pixel coordinate.
-  void to_stable(float error_u, float error_v, float pan_rad, float tilt_rad, double &u,
-                 double &v) const {
-    u = static_cast<double>(error_u) + (static_cast<double>(focal_x) * (pan_rad - pan_ref_rad));
-    v = static_cast<double>(error_v) + (static_cast<double>(focal_y) * (tilt_rad - tilt_ref_rad));
-  }
-
-  /// Ego-stabilised pixel coordinate -> aim error at the current pose.
-  void to_error(double u, double v, float pan_rad, float tilt_rad, float &error_u,
-                float &error_v) const {
-    error_u = static_cast<float>(u - (static_cast<double>(focal_x) * (pan_rad - pan_ref_rad)));
-    error_v = static_cast<float>(v - (static_cast<double>(focal_y) * (tilt_rad - tilt_ref_rad)));
-  }
-
-  void configure(const config::TrackingConfig &cfg) {
-    meas_sigma_px = cfg.filter_meas_sigma_px_;
-    qc = static_cast<double>(cfg.filter_qc_);
-    gate = static_cast<double>(cfg.filter_gate_);
-    adapt_window = cfg.filter_adapt_window_;
-    latency_s = static_cast<double>(cfg.filter_pipeline_latency_ms_) * 1.0e-3;
-
-    imm.setTransitionProbabilities(static_cast<double>(cfg.filter_imm_transition_p_));
-    imm.setProcessNoiseSpectralDensities({qc, qc});
-    // The expected normalised innovation of a well-tuned 2-D position filter is
-    // the measurement dimension, which is exactly what the adaptive-noise
-    // controller wants to drive towards.
-    imm.setAdaptiveNoise(true, adapt_window, 2.0);
-  }
-
-  Estimate build_estimate(double t_s, bool measured) const {
-    const auto state = imm.getState();
-    const auto cov = imm.getCovariance();
-
-    float pan = pan_ref_rad;
-    float tilt = tilt_ref_rad;
-    angle_at(t_s, pan, tilt);
-
-    float error_u = 0.0F;
-    float error_v = 0.0F;
-    to_error(state(0), state(1), pan, tilt, error_u, error_v);
-
-    return Estimate(error_u, error_v, static_cast<float>(state(2)), static_cast<float>(state(3)),
-                    static_cast<float>(std::sqrt(std::max(cov(0, 0), 0.0))),
-                    static_cast<float>(std::sqrt(std::max(cov(1, 1), 0.0))), box_w_px, box_h_px,
-                    coast, measured);
-  }
-
-  void seed(const core::Detection &det, double t_capture) {
+  /// Record the pose at this frame's capture and the image velocity the camera's
+  /// motion caused since the previous frame. Without encoders the pose stays at
+  /// zero, which kalman::Tracker reads as a camera that never moves.
+  void update_frame_pose(const core::FrameObservation &obs, double dt) {
     float pan = 0.0F;
     float tilt = 0.0F;
-    angle_at(t_capture, pan, tilt);
+    const bool have_pose = ego_active && angle_at(obs.timestamp_s_ - latency_s, pan, tilt);
 
-    // Anchor the stabilised frame at the seeding pose, so u_stable == the raw
-    // aim error there and the two coordinate systems agree at t = seed.
-    pan_ref_rad = pan;
-    tilt_ref_rad = tilt;
+    camera_compensated = have_pose && have_frame_pose && dt > 0.0;
+    camera_vu = 0.0F;
+    camera_vv = 0.0F;
+    if (camera_compensated) {
+      // Shortest arc, matching the tracker's own unwrap across the ±π seam.
+      const float d_pan = std::remainder(pan - frame_pan_rad, k_two_pi);
+      const float d_tilt = std::remainder(tilt - frame_tilt_rad, k_two_pi);
+      camera_vu = pan_px_per_rad * d_pan / static_cast<float>(dt);
+      camera_vv = tilt_px_per_rad * d_tilt / static_cast<float>(dt);
+    }
 
-    const float center_u = det.left_ + (det.width_ * 0.5F);
-    const float center_v = det.top_ + (det.height_ * 0.5F);
-    const float error_u = center_u - (det_w_px * 0.5F);
-    const float error_v = center_v - (det_h_px * 0.5F);
+    have_frame_pose = have_pose;
+    frame_pan_rad = pan;
+    frame_tilt_rad = tilt;
+  }
 
-    double u = 0.0;
-    double v = 0.0;
-    to_stable(error_u, error_v, pan, tilt, u, v);
+  /// Extrapolate the state from this frame's capture to the control instant,
+  /// and place it in the image at the gimbal's newest pose.
+  void update_lead(const core::FrameObservation &obs, double now_s) {
+    const double waited = std::max(0.0, now_s - obs.timestamp_s_);
+    const double horizon = std::min(latency_s + waited, k_max_lead_s);
 
-    Eigen::Matrix<double, 4, 1> x4;
-    x4 << u, v, 0.0, 0.0;
-    Eigen::Matrix<double, 4, 4> p4 = Eigen::Matrix<double, 4, 4>::Zero();
-    const double pos_var = static_cast<double>(meas_sigma_px) * static_cast<double>(meas_sigma_px);
-    p4(0, 0) = pos_var;
-    p4(1, 1) = pos_var;
-    p4(2, 2) = k_initial_velocity_var;
-    p4(3, 3) = k_initial_velocity_var;
+    float pan = frame_pan_rad;
+    float tilt = frame_tilt_rad;
+    if (ego_active)
+      angle_at(obs.timestamp_s_ - latency_s + horizon, pan, tilt);
 
-    imm.initialize(x4, p4);
-    initialized = true;
-    coast = 0;
+    const auto h = static_cast<float>(horizon);
+    const kalman::Rect at = tracker.roi(pan, tilt, h);
+    const kalman::PredictedState p = tracker.predict(h);
+    lead_horizon_s = h;
+    lead_error = core::Point{at.cu, at.cv};
+    lead_velocity = core::Point{p.velocity.x(), p.velocity.y()};
+  }
+
+  [[nodiscard]] Estimate build_estimate(bool measured) const {
+    // Centre of a zero-horizon ROI is the estimate mapped back into this frame's
+    // image, i.e. with the camera shift at capture added back.
+    const kalman::Rect at = tracker.roi(frame_pan_rad, frame_tilt_rad, 0.0F);
+    const Eigen::Vector2f velocity = tracker.velocity();
+    const kalman::Tracker::Matrix6 &cov = tracker.covariance();
+
+    Estimate::Values v;
+    v.time_s = last_time_s;
+    v.error_u_px = at.cu;
+    v.error_v_px = at.cv;
+    v.vu_px_s = velocity.x();
+    v.vv_px_s = velocity.y();
+    v.camera_vu_px_s = camera_vu;
+    v.camera_vv_px_s = camera_vv;
+    v.sigma_u_px = std::sqrt(std::max(cov(0, 0), 0.0F));
+    v.sigma_v_px = std::sqrt(std::max(cov(1, 1), 0.0F));
+    v.box_w_px = box_w_px;
+    v.box_h_px = box_h_px;
+    v.detection_error_px = detection_error_px;
+    v.detection_frame_id = detection_frame_id;
+    v.coast_frames = coast;
+    v.measured = measured;
+    v.camera_compensated = camera_compensated;
+    v.lead_horizon_s = lead_horizon_s;
+    v.lead_error_u_px = lead_error.cx_;
+    v.lead_error_v_px = lead_error.cy_;
+    v.lead_vu_px_s = lead_velocity.cx_;
+    v.lead_vv_px_s = lead_velocity.cy_;
+    return Estimate(v);
+  }
+
+  [[nodiscard]] core::Point detection_error(const core::Detection &det) const {
+    return core::Point{(det.left_ + (det.width_ * 0.5F)) - (det_w_px * 0.5F),
+                       (det.top_ + (det.height_ * 0.5F)) - (det_h_px * 0.5F)};
+  }
+
+  /// A hesitant detection is a worse position fix: widen its noise.
+  [[nodiscard]] kalman::Detection measurement(const core::Detection &det,
+                                              const core::Point &error) const {
+    const float confidence = std::clamp(det.confidence_, 0.0F, 1.0F);
+    const float sigma = meas_sigma_px * std::sqrt(1.0F + (conf_noise_scale * (1.0F - confidence)));
+    return kalman::Detection{error.cx_, error.cy_, sigma};
+  }
+
+  void accept(const core::Detection &det, const core::Point &error, uint64_t frame_id) {
     box_w_px = det.width_;
     box_h_px = det.height_;
+    detection_error_px = error;
+    detection_frame_id = frame_id;
+    coast = 0;
+    coast_s = 0.0;
+  }
+
+  /// Seed a new track from this frame's detection. The pose at capture becomes
+  /// the tracker's stabilised-frame reference.
+  bool seed(const core::FrameObservation &obs) {
+    const core::Detection &det = *obs.detection_;
+    const core::Point error = detection_error(det);
+    if (!tracker.reset(measurement(det, error), frame_pan_rad, frame_tilt_rad))
+      return false;
+    initialized = true;
+    accept(det, error, obs.frame_id_);
+    return true;
   }
 };
 
@@ -233,17 +283,43 @@ struct TargetFilter::Impl {
 //  TargetFilter
 // ---------------------------------------------------------------------------
 
+namespace {
+
+  kalman::Config make_tracker_config(const config::TrackingConfig &cfg, float pan_px_per_rad,
+                                     float tilt_px_per_rad) {
+    kalman::Config k;
+    k.q_jerk = cfg.filter_q_jerk_;
+    k.detection_sigma = cfg.filter_meas_sigma_px_;
+    k.gate_chi2 = cfg.filter_gate_;
+    // A seed is one detection: its position is as uncertain as the detector.
+    k.init_pos_sigma = cfg.filter_meas_sigma_px_;
+    k.pan_px_per_rad = pan_px_per_rad;
+    k.tilt_px_per_rad = tilt_px_per_rad;
+    // Track loss is decided here, by time, so it means the same at 30 and 40 fps.
+    k.max_coast_frames = 0;
+    return k;
+  }
+
+} // namespace
+
 TargetFilter::TargetFilter(const config::TrackingConfig &cfg, uint32_t det_width,
-                           uint32_t det_height, float focal_x_px, float focal_y_px)
-  : impl_(std::make_unique<Impl>()) {
-  impl_->det_w_px = (det_width > 0U) ? static_cast<float>(det_width) : 1.0F;
-  impl_->det_h_px = (det_height > 0U) ? static_cast<float>(det_height) : 1.0F;
+                           uint32_t det_height, float focal_x_px, float focal_y_px) {
   // Both focal lengths are required: a partial pair would stabilise one axis and
   // leave the other to fight the gimbal, which is worse than neither.
-  impl_->ego_active = focal_x_px > 0.0F && focal_y_px > 0.0F;
-  impl_->focal_x = impl_->ego_active ? focal_x_px : 0.0F;
-  impl_->focal_y = impl_->ego_active ? focal_y_px : 0.0F;
-  impl_->configure(cfg);
+  const bool ego_active = focal_x_px > 0.0F && focal_y_px > 0.0F;
+  const float pan_gain = ego_active ? -focal_x_px : 0.0F;
+  const float tilt_gain = ego_active ? -focal_y_px : 0.0F;
+
+  impl_ = std::make_unique<Impl>(make_tracker_config(cfg, pan_gain, tilt_gain));
+  impl_->det_w_px = (det_width > 0U) ? static_cast<float>(det_width) : 1.0F;
+  impl_->det_h_px = (det_height > 0U) ? static_cast<float>(det_height) : 1.0F;
+  impl_->ego_active = ego_active;
+  impl_->pan_px_per_rad = pan_gain;
+  impl_->tilt_px_per_rad = tilt_gain;
+  impl_->meas_sigma_px = cfg.filter_meas_sigma_px_;
+  impl_->conf_noise_scale = cfg.filter_conf_noise_scale_;
+  impl_->latency_s = static_cast<double>(cfg.filter_pipeline_latency_ms_) * 1.0e-3;
+  impl_->max_coast_s = static_cast<double>(cfg.filter_max_coast_ms_) * 1.0e-3;
 }
 
 TargetFilter::~TargetFilter() = default;
@@ -260,7 +336,7 @@ bool TargetFilter::initialized() const noexcept {
   return impl_->initialized;
 }
 
-int TargetFilter::coast_ticks() const noexcept {
+int TargetFilter::coast_frames() const noexcept {
   return impl_->coast;
 }
 
@@ -268,93 +344,63 @@ void TargetFilter::push_gimbal_sample(double t_s, float pan_rad, float tilt_rad)
   impl_->push_angle(t_s, pan_rad, tilt_rad);
 }
 
-std::optional<Estimate> TargetFilter::step(float dt_s,
-                                           const std::optional<core::Detection> &measurement,
-                                           double t_s) {
+std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observation,
+                                           double now_s) {
   Impl &f = *impl_;
+  const core::FrameObservation &obs = observation;
 
-  // Decide when the measurement was actually taken. The detection carries the
-  // buffer PTS; the declared pipeline latency covers the part of that age the
-  // filter cannot observe (exposure, ISP, inference). Clamp into the past: a
-  // stamp ahead of now means a clock-domain mix-up, and trusting it would make
-  // the filter run its update backwards in time.
-  double t_capture = t_s;
-  bool have_measurement = measurement.has_value();
-  if (have_measurement && measurement->valid_timestamp()) {
-    t_capture = measurement->timestamp_s_ - f.latency_s;
-    if (t_capture > t_s)
-      t_capture = t_s;
+  // Frame interval. Prefer the camera's own cadence: the arrival stamp carries
+  // the inference time's jitter, and dividing a displacement by a jittery dt
+  // turns that jitter straight into velocity noise.
+  const bool first_frame = f.last_time_s <= 0.0;
+  double dt = obs.timestamp_s_ - f.last_time_s;
+  if (obs.capture_s_ > 0.0 && f.last_capture_s > 0.0)
+    dt = obs.capture_s_ - f.last_capture_s;
+
+  if (!first_frame && !(dt > 0.0)) {
+    // Not newer than the frame already processed: nothing to advance across.
+    if (!f.initialized)
+      return std::nullopt;
+    return f.build_estimate(false);
   }
+  if (first_frame)
+    dt = 0.0;
+  dt = std::min(dt, k_max_step_s);
+
+  f.last_time_s = obs.timestamp_s_;
+  f.last_capture_s = obs.capture_s_;
+  f.update_frame_pose(obs, dt);
 
   if (!f.initialized) {
-    if (!have_measurement)
+    if (!obs.detection_.has_value() || !f.seed(obs))
       return std::nullopt;
-    f.seed(*measurement, t_capture);
-    f.last_time_s = t_s;
-    return f.build_estimate(t_s, true);
+    f.update_lead(obs, now_s);
+    return f.build_estimate(true);
   }
 
-  // Bound the advance so a scheduling stall cannot blow the covariance up
-  // without limit; the filter is fed ~10 ms steps, not multi-second ones.
-  const double max_step = (static_cast<double>(std::max(dt_s, 0.0F)) * 8.0) + 0.05;
-
-  // Advance the state clock in two hops, capture-time then now, and never
-  // rewind it. The measurement is deliberately older than the tick (that is what
-  // the latency compensation is for), so rewinding `last_time_s` to the capture
-  // time and then predicting to `t_s` would advance the state by
-  // (age + tick) every tick instead of (tick). That over-prediction is
-  // systematic, and it biases the velocity estimate low by roughly
-  // latency/tick -- measured at ~20% low with a 20 ms latency on a 33 ms camera.
-  double t_state = f.last_time_s;
-
-  const double to_capture = std::clamp(t_capture - t_state, 0.0, max_step);
-  if (to_capture > 0.0) {
-    f.imm.predict(to_capture);
-    t_state = t_capture;
+  // Initialised implies a previous frame, so `dt > 0` here.
+  std::optional<kalman::Detection> z;
+  core::Point error{0.0F, 0.0F};
+  if (obs.detection_.has_value()) {
+    error = f.detection_error(*obs.detection_);
+    z = f.measurement(*obs.detection_, error);
   }
 
-  bool accepted = false;
-  if (have_measurement) {
-    const core::Detection &det = *measurement;
-    const float center_u = det.left_ + (det.width_ * 0.5F);
-    const float center_v = det.top_ + (det.height_ * 0.5F);
-
-    float pan = f.pan_ref_rad;
-    float tilt = f.tilt_ref_rad;
-    f.angle_at(t_capture, pan, tilt);
-
-    double u = 0.0;
-    double v = 0.0;
-    f.to_stable(center_u - (f.det_w_px * 0.5F), center_v - (f.det_h_px * 0.5F), pan, tilt, u, v);
-
-    Eigen::Matrix<double, 2, 1> z;
-    z << u, v;
-    Eigen::Matrix<double, 2, 2> r =
-      Eigen::Matrix<double, 2, 2>::Identity() *
-      (static_cast<double>(f.meas_sigma_px) * static_cast<double>(f.meas_sigma_px));
-
-    accepted = f.imm.update(z, r, f.gate);
-    if (accepted) {
-      f.box_w_px = det.width_;
-      f.box_h_px = det.height_;
-      f.coast = 0;
+  const bool accepted =
+    f.tracker.step(f.frame_pan_rad, f.frame_tilt_rad, z, static_cast<float>(dt));
+  if (accepted) {
+    f.accept(*obs.detection_, error, obs.frame_id_);
+  } else {
+    ++f.coast;
+    f.coast_s += dt;
+    if (f.max_coast_s > 0.0 && f.coast_s > f.max_coast_s) {
+      f.drop_track();
+      return std::nullopt;
     }
   }
-  if (!accepted)
-    ++f.coast;
 
-  // Carry the corrected state forward to now, so the estimate handed to the
-  // control law is current even though the fix it corrects with is older.
-  // Measured from t_state, not from the previous tick, so the total advance this
-  // tick is exactly the elapsed time no matter where the capture time fell.
-  const double to_now = std::clamp(t_s - t_state, 0.0, max_step);
-  if (to_now > 0.0) {
-    f.imm.predict(to_now);
-    t_state = t_s;
-  }
-  f.last_time_s = t_state;
-
-  return f.build_estimate(t_s, accepted);
+  f.update_lead(obs, now_s);
+  return f.build_estimate(accepted);
 }
 
 void TargetFilter::reset() noexcept {

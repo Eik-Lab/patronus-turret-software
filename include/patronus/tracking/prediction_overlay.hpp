@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 
@@ -16,37 +17,44 @@ namespace patronus::tracking {
 /// the side that already knows both numbers, so the overlay cannot silently use
 /// the wrong scale factor.
 struct PredictionSample {
-  /// When this sample was published, on the shared steady-clock base, seconds.
-  /// The video thread drops samples older than a fraction of a second, so a
-  /// tracking thread that died mid-run cannot leave a frozen marker on screen.
+  /// Time of the camera frame this estimate is valid at, on the shared
+  /// steady-clock base, seconds. The video thread extrapolates from here to the
+  /// frame it is drawing, and drops samples older than a fraction of a second so
+  /// a tracking thread that died mid-run cannot leave a frozen marker on screen.
   double publish_t_s{0.0};
 
-  /// Predicted target centre, normalised.
+  /// Estimated target centre at `publish_t_s`, normalised.
   float u_norm{0.0F};
   float v_norm{0.0F};
 
-  /// Predicted centre `lead_s` seconds ahead, normalised. The overlay draws a
-  /// vector from the current estimate to this point.
-  float lead_u_norm{0.0F};
-  float lead_v_norm{0.0F};
-
-  /// Target velocity, ego-motion removed, normalised units per second.
+  /// Target velocity, camera motion removed, normalised units per second. The
+  /// overlay draws the velocity arrow along this.
   float vu_norm_s{0.0F};
   float vv_norm_s{0.0F};
 
-  /// Size of the most recent accepted detection box, normalised.
-  float box_w_norm{0.0F};
-  float box_h_norm{0.0F};
+  /// Image velocity induced by the camera's own motion, normalised units per
+  /// second. The target moves through the image at the sum of this and its own
+  /// velocity, which is what carries the estimate forward to the drawn frame.
+  float camera_vu_norm_s{0.0F};
+  float camera_vv_norm_s{0.0F};
 
-  /// 1-sigma position uncertainty, normalised. Drives the overlay's confidence
-  /// cue so a coasting, growing-uncertain estimate looks different from a
-  /// freshly corrected one.
-  float sigma_norm{0.0F};
+  /// 1-sigma position uncertainty per axis, normalised by the detection width
+  /// and height respectively. The overlay draws the 3-sigma ellipse from these,
+  /// so a coasting estimate visibly balloons while it extrapolates.
+  float sigma_u_norm{0.0F};
+  float sigma_v_norm{0.0F};
 
-  /// Ticks since the last accepted measurement.
-  int coast_ticks{0};
+  /// Centre of the most recent detection the filter accepted, normalised. This
+  /// is the raw measurement, not a filter output.
+  float detection_u_norm{0.0F};
+  float detection_v_norm{0.0F};
 
-  /// Whether the most recent filter tick accepted a detection.
+  /// `FrameObservation::frame_id_` of that detection. The pipeline compares it
+  /// with the frame it sent to learn whether its detection was accepted.
+  uint64_t detection_frame_id{0};
+
+  /// Whether the detection of the frame at `publish_t_s` was accepted. False
+  /// while the filter is coasting.
   bool measured{false};
 };
 
@@ -60,9 +68,10 @@ struct PredictionSample {
 /// overlay whenever the video thread outran the tracking tick. So this keeps one
 /// non-consuming latest-value slot per gimbal instead.
 ///
-/// The critical section is a single 40-byte copy per publish. At the 100 Hz
+/// The critical section is a single small trivially-copyable struct copy per
+/// publish. At the 100 Hz
 /// tick rate that is negligible against a per-tick cost that already includes
-/// an IMM predict and update, and it is a different cache line per gimbal.
+/// a Kalman predict and update, and it is a different cache line per gimbal.
 class PredictionChannel {
 public:
   /// @brief Maximum gimbals whose predictions can be published at once.

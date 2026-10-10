@@ -1,5 +1,7 @@
 #pragma once
 
+#include "patronus/core/types.hpp"
+
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -60,6 +62,38 @@ struct Detection {
   [[nodiscard]] bool valid_timestamp() const noexcept {
     return timestamp_s_ > 0.0;
   }
+};
+
+/// @brief Everything the perception pipeline learned from one camera frame.
+///
+/// One of these is published per frame, whether or not anything was detected:
+/// the target filter runs once per frame, and a frame with no detection is still
+/// a time step it has to predict across. POD — no heap, safe to copy between
+/// threads.
+///
+/// All pixel quantities are in *detection* pixels
+/// (`PipelineConfig::detection_width_`), the space `Detection` boxes are in.
+struct FrameObservation {
+  /// When the frame reached the pipeline probe, `steady_now_s()` seconds. This
+  /// is the stamp to compare against other threads' clocks (encoder history,
+  /// overlay age).
+  double timestamp_s_{0.0};
+
+  /// Capture time of the frame on the camera's own cadence, seconds, with
+  /// arrival jitter removed. Only differences are meaningful: this is what the
+  /// filter's `dt` comes from, so inference-time jitter does not become velocity
+  /// noise. 0.0 means unavailable.
+  double capture_s_{0.0};
+
+  /// Interval since the previous frame on the capture clock, seconds. 0.0 on the
+  /// first frame.
+  double frame_dt_s_{0.0};
+
+  /// Monotonic per-camera frame counter.
+  uint64_t frame_id_{0};
+
+  /// The single highest-confidence drone detection in the frame, if any.
+  std::optional<Detection> detection_;
 };
 
 /// @brief Thread-safe single-slot container for the most recent value.

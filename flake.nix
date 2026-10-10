@@ -1,5 +1,5 @@
 {
-  description = "taken from: Kalman filter C++ ioe";
+  description = "Patronus turret software — dev shell";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
@@ -36,57 +36,33 @@
           ...
         }:
         let
-          # Build tools common to all phases
-          nativeBuildInputs = with pkgs; [
-            cmake
-            ninja
-            pkg-config
-          ];
+          # Only what the turret build cannot get from the host.
+          #
+          # DeepStream, CUDA, GStreamer, glib and libusb exist only as JetPack /
+          # Ubuntu packages under /usr and /opt/nvidia, and they are built against
+          # the host glibc and libstdc++. So the turret has to be compiled and
+          # linked by the *host* cmake and gcc. The nixpkgs cmake deliberately does
+          # not search /usr (CANdle-SDK then fails on "libusb library not found"),
+          # and a nixpkgs gcc links against its own glibc, which does not mix with
+          # the NVIDIA libraries.
+          #
+          # This shell therefore brings no cmake, compiler, pkg-config or
+          # clang-tidy, and never sets CXXFLAGS. It supplies Eigen, which the host
+          # may lack and which is header-only, so there is no ABI to mismatch.
+          buildInputs = [ pkgs.eigen ];
 
-          # Runtime/library dependencies
-          buildInputs = with pkgs; [
-            eigen
-            gtest
-            gbenchmark
-            opencv
-          ];
-
-          # Development-only tools
+          # Development-only tools that do not take part in the build.
           devInputs =
             (with pkgs; [
-              clang-tools
               cmake-language-server
-              lldb
               bear
-              tracy
             ])
-            ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [
+            ++ pkgs.lib.optionals (!pkgs.stdenv.hostPlatform.isDarwin) [
               pkgs.gdb
               pkgs.valgrind
-              pkgs.linuxPackages.perf
-              pkgs.samply
             ];
-
-          kalman-cpp = pkgs.stdenv.mkDerivation {
-            pname = "kalman-cpp";
-            version = "0.1.0";
-
-            src = self;
-
-            inherit nativeBuildInputs;
-            inherit buildInputs;
-
-            cmakeFlags = [
-              "-DCMAKE_BUILD_TYPE=Release"
-              "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-            ];
-
-            CXXFLAGS = [ "-std=c++17" ];
-          };
         in
         {
-          packages.default = kalman-cpp;
-
           checks = {
             pre-commit = inputs."pre-commit-hooks-nix".lib.${system}.run {
               src = self;
@@ -110,20 +86,15 @@
             };
           };
 
-          devShells.default = pkgs.mkShell {
-            inherit nativeBuildInputs;
-            buildInputs = buildInputs ++ devInputs;
+          devShells.default = pkgs.mkShellNoCC {
+            packages = buildInputs ++ devInputs;
 
             shellHook = ''
               ${config.checks.pre-commit.shellHook}
               export CMAKE_EXPORT_COMPILE_COMMANDS=ON
-              # Resolve find_package(Tracy) to the pinned nixpkgs tracy.
-              export CMAKE_PREFIX_PATH="${pkgs.tracy}:''${CMAKE_PREFIX_PATH:-}"
+              # Let the host cmake resolve find_package(Eigen3) to the pinned eigen.
+              export CMAKE_PREFIX_PATH="${pkgs.eigen}''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
             '';
-
-            CXXFLAGS = "-std=c++17 -Wall -Wextra -Wpedantic -Werror";
-
-            hardeningDisable = [ "fortify" ];
           };
         };
     };

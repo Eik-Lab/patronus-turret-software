@@ -109,21 +109,15 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
     cfg.home_return_max_velocity_ = 1.5F;
 
   cfg.filter_enabled_ = read_bool(kf, group, "filter_enabled", true);
-  cfg.filter_meas_sigma_px_ = read_float(kf, group, "filter_meas_sigma_px", 4.0F);
+  cfg.filter_meas_sigma_px_ = read_float(kf, group, "filter_meas_sigma_px", 8.0F);
   if (cfg.filter_meas_sigma_px_ <= 0.0F)
-    cfg.filter_meas_sigma_px_ = 4.0F;
-  cfg.filter_qc_ = read_float(kf, group, "filter_qc", 2000.0F);
-  if (cfg.filter_qc_ <= 0.0F)
-    cfg.filter_qc_ = 2000.0F;
+    cfg.filter_meas_sigma_px_ = 8.0F;
+  cfg.filter_q_jerk_ = read_float(kf, group, "filter_q_jerk", 2.0e5F);
+  if (cfg.filter_q_jerk_ < 0.0F)
+    cfg.filter_q_jerk_ = 2.0e5F;
   cfg.filter_gate_ = read_float(kf, group, "filter_gate", 9.21F);
   if (cfg.filter_gate_ <= 0.0F)
     cfg.filter_gate_ = 9.21F;
-  cfg.filter_imm_transition_p_ = read_float(kf, group, "filter_imm_transition_p", 0.02F);
-  if (cfg.filter_imm_transition_p_ < 0.0F || cfg.filter_imm_transition_p_ >= 1.0F)
-    cfg.filter_imm_transition_p_ = 0.02F;
-  cfg.filter_adapt_window_ = read_float(kf, group, "filter_adapt_window", 30.0F);
-  if (cfg.filter_adapt_window_ < 1.0F)
-    cfg.filter_adapt_window_ = 1.0F;
   cfg.filter_tick_ms_ = static_cast<int>(read_uint<uint16_t>(kf, group, "filter_tick_ms", 10));
   if (cfg.filter_tick_ms_ <= 0)
     cfg.filter_tick_ms_ = 10;
@@ -131,6 +125,11 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
     static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms", 20));
   if (cfg.filter_pipeline_latency_ms_ < 0)
     cfg.filter_pipeline_latency_ms_ = 0;
+  cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
+  if (cfg.filter_conf_noise_scale_ < 0.0F)
+    cfg.filter_conf_noise_scale_ = 10.0F;
+  cfg.filter_max_coast_ms_ =
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_coast_ms", 1000));
 
   cfg.kp_ = read_float(kf, group, "kp", 0.006F);
   if (cfg.kp_ < 0.0F)

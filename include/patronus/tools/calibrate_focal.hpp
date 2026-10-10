@@ -11,8 +11,8 @@ namespace patronus::tools {
 /// @brief Measure the camera focal length for one gimbal by slewing through
 ///        known angles and solving fx = delta_px / delta_rad.
 ///
-/// The IMM's ego-motion compensation converts gimbal slew rate into apparent
-/// pixel rate using these values. Left at zero the filter treats the gimbal's own
+/// The target filter's ego-motion compensation converts gimbal encoder angles
+/// into image shift using these values. Left at zero the filter treats the gimbal's own
 /// motion as a target manoeuvre, which makes the D and lead terms fight the
 /// gimbal and causes overshoot.
 ///
@@ -36,7 +36,7 @@ namespace patronus::tools {
 /// @return 0 on success, non-zero if no usable displacement was observed.
 int run_focal_calibration(comm::CandleMotor &motor, size_t gimbal,
                           const patronus::config::GimbalConfig &gimbal_cfg,
-                          patronus::core::LatestValue<patronus::core::Detection> &detections,
+                          patronus::core::LatestValue<patronus::core::FrameObservation> &detections,
                           uint32_t detection_w, uint32_t detection_h, float focal_x_px,
                           float focal_y_px, std::atomic<bool> &running);
 

@@ -17,6 +17,7 @@
 #include <chrono>
 #include <csignal>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,8 +34,9 @@ static void signal_handler(int) {
 using patronus::config::load_config;
 using patronus::config::SystemConfig;
 
-static patronus::core::LatestValue<patronus::core::Detection> detection_rgb;
-static patronus::core::LatestValue<patronus::core::Detection> detection_mono;
+// One observation per camera frame, detection or not.
+static patronus::core::LatestValue<patronus::core::FrameObservation> detection_rgb;
+static patronus::core::LatestValue<patronus::core::FrameObservation> detection_mono;
 
 // One channel per camera. The tracking threads for the gimbals that read a
 // given camera publish into that camera's channel, and that camera's OSD probe
@@ -128,7 +130,9 @@ int main(int argc, char *argv[]) {
     });
   }
 
-  // Tracking threads — one per gimbal, each consumes detections and drives motors.
+  // Tracking threads — one per gimbal. Each consumes detections, runs the target
+  // filter and publishes its prediction for the overlay; it drives the motors
+  // only when it has a motor handle.
   std::vector<std::thread> tracking_threads;
   std::shared_ptr<patronus::comm::CandleMotor> motor;
   // Focal calibration also needs the motor, but the two must not run at once:
@@ -140,98 +144,118 @@ int main(int argc, char *argv[]) {
     if (!motor->init()) {
       g_critical("Failed to initialise CANdle motor driver — tracking disabled");
       motor.reset();
-    } else if (!calibrate_focal) {
-      for (size_t g = 0; g < motor->gimbal_count(); ++g) {
+    }
+  }
+
+  // The filter does not depend on the motors: with `tracking=false`, or a CAN bus
+  // that failed to come up, the threads still run so the overlay shows the
+  // prediction, and simply never command a velocity. Not during focal
+  // calibration, which owns both the gimbals and the detection queues.
+  if (!calibrate_focal && (rgb_active || mono_active)) {
+    // Only hand the threads a motor when tracking was asked for.
+    const std::shared_ptr<patronus::comm::CandleMotor> drive_motor =
+      cfg.tracking_ ? motor : nullptr;
+    const size_t gimbal_count = drive_motor ? drive_motor->gimbal_count() : cfg.gimbals_.size();
+
+    for (size_t g = 0; g < gimbal_count; ++g) {
+      if (drive_motor) {
         g_print("Tracking gimbal %zu started (max %.2f rad/s, tilt limit ±%.2f rad)\n", g,
                 cfg.gimbals_[g].max_velocity_rad_s_, cfg.gimbals_[g].tilt_max_rad_);
+      } else {
+        g_print("Gimbal %zu: prediction overlay only — motors not driven\n", g);
+      }
 
-        // Each gimbal gets a copy of its tracking config and shared motor handle
-        const auto trk = cfg.tracking_cfg_[g];
-        const auto gimbal_cfg = cfg.gimbals_[g];
+      // Each gimbal gets a copy of its tracking config and shared motor handle
+      const auto trk = cfg.tracking_cfg_[g];
+      const auto gimbal_cfg = cfg.gimbals_[g];
 
-        // Round-robin across cameras; when only one pipeline is active, every
-        // gimbal reads from it. The pipeline a gimbal reads from is also the
-        // one whose geometry and focal lengths its filter must use, so select
-        // it once here and capture it by value.
-        const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
-        const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
-        auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
+      // Round-robin across cameras; when only one pipeline is active, every
+      // gimbal reads from it. The pipeline a gimbal reads from is also the
+      // one whose geometry and focal lengths its filter must use, so select
+      // it once here and capture it by value.
+      const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
+      const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
+      auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
 
-        tracking_threads.emplace_back([motor, g, trk, gimbal_cfg, pipe, use_rgb, rgb_active,
-                                       mono_active, predictions]() {
-          auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
-                                                  : (use_rgb ? &detection_rgb : &detection_mono);
+      tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, use_rgb,
+                                     rgb_active, mono_active, predictions]() {
+        auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
+                                                : (use_rgb ? &detection_rgb : &detection_mono);
 
-          patronus::tracking::TargetFilter filter(
-            trk, pipe.detection_width_, pipe.detection_height_, pipe.focal_x_px_, pipe.focal_y_px_);
+        patronus::tracking::TargetFilter filter(trk, pipe.detection_width_, pipe.detection_height_,
+                                                pipe.focal_x_px_, pipe.focal_y_px_);
 
-          const patronus::tracking::SensorControlGains gains{
-            .kp_ = trk.kp_, .kd_ = trk.kd_, .lead_gain_ = trk.lead_gain_};
+        const patronus::tracking::SensorControlGains gains{
+          .kp_ = trk.kp_, .kd_ = trk.kd_, .lead_gain_ = trk.lead_gain_};
 
-          if (trk.filter_enabled_ && !filter.ego_compensation_active()) {
-            g_print("Tracking gimbal %zu: ego-motion compensation OFF "
-                    "(focal_x_px/focal_y_px unset). Velocity terms will include "
-                    "self-motion; run --calibrate-focal to enable.\n",
+        // Null when this thread only feeds the overlay. Every motor call below
+        // is behind this.
+        const bool driving = motor != nullptr;
+
+        if (driving && trk.filter_enabled_ && !filter.ego_compensation_active()) {
+          g_warning("Tracking gimbal %zu: no focal length set (focal_x_px/focal_y_px). "
+                    "Camera motion is not compensated, so the filter will read the "
+                    "gimbal's own slew as target motion. Run --calibrate-focal.",
                     g);
-          }
+        }
 
-          // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no
-          // logging per frame.
-          enum class State { Tracking, ReturningHome, AtHome };
-          State state = State::Tracking;
-          auto last_detection = std::chrono::steady_clock::now();
+        // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no
+        // logging per frame.
+        enum class State { Tracking, ReturningHome, AtHome };
+        State state = State::Tracking;
+        auto last_detection = std::chrono::steady_clock::now();
 
-          // A track is treated as lost once the filter has coasted this
-          // long without accepting a measurement. Bounded so that a
-          // detection stream which is present but entirely inconsistent
-          // with the current estimate (a false positive, or a target that
-          // jumped) cannot keep a stale estimate driving the motor
-          // indefinitely. Slightly longer than the filter's own
-          // re-acquisition window so a brief occlusion is ridden out.
-          const auto stale_after = std::chrono::milliseconds(trk.filter_tick_ms_) * 45;
+        // A track is treated as lost once this long has passed without a
+        // detection. Bounds how long a coasting estimate may keep driving the
+        // motor.
+        const auto stale_after = std::chrono::milliseconds(trk.filter_tick_ms_) * 45;
 
-          // The filter's gimbal-angle history, its tick, and the timestamps the
-          // pipeline stamps on each detection all come from steady_now_s(), a
-          // single process-wide monotonic epoch. They can be subtracted directly,
-          // which is the whole reason the filter can compensate for pipeline
-          // latency at all.
-          auto last_tick = std::chrono::steady_clock::now();
-          const auto tick = std::chrono::milliseconds(trk.filter_tick_ms_);
+        // The loop ticks at this period to service the motors. The filter does
+        // not: it steps once per camera frame, when an observation arrives.
+        const auto tick = std::chrono::milliseconds(trk.filter_tick_ms_);
 
-          // Normalisation factors for the overlay. Publishing normalised
-          // coordinates keeps the video thread from having to know the detection
-          // pixel space, which is not the muxed space and not the network input.
-          const float det_w =
-            (pipe.detection_width_ > 0U) ? static_cast<float>(pipe.detection_width_) : 1.0F;
-          const float det_h =
-            (pipe.detection_height_ > 0U) ? static_cast<float>(pipe.detection_height_) : 1.0F;
-          const float half_w = det_w * 0.5F;
-          const float half_h = det_h * 0.5F;
-          const float lead_s = pipe.prediction_lead_s_;
+        // Normalisation factors for the overlay. Publishing normalised
+        // coordinates keeps the video thread from having to know the detection
+        // pixel space, which is not the muxed space and not the network input.
+        const float det_w =
+          (pipe.detection_width_ > 0U) ? static_cast<float>(pipe.detection_width_) : 1.0F;
+        const float det_h =
+          (pipe.detection_height_ > 0U) ? static_cast<float>(pipe.detection_height_) : 1.0F;
+        const float half_w = det_w * 0.5F;
+        const float half_h = det_h * 0.5F;
 
-          while (running) {
-            const auto now = std::chrono::steady_clock::now();
-            const double t_s = patronus::core::steady_now_s();
-            const float dt_s = std::chrono::duration<float>(now - last_tick).count();
+        // The filter's estimate for the most recent frame, and the motor command
+        // computed from it. Both are held between frames: the command is re-sent
+        // every tick so the motors keep being serviced, but it only changes when
+        // a new frame gives the filter something new to say.
+        std::optional<patronus::tracking::Estimate> est;
+        patronus::core::AimAngles cmd{0.0F, 0.0F};
 
-            // Record the encoder angle before stepping, so the filter can
-            // look up the pose that was current when a frame was captured.
+        while (running) {
+          const auto now = std::chrono::steady_clock::now();
+          const double t_s = patronus::core::steady_now_s();
+
+          // Record the encoder angle every tick, so the filter can look up the
+          // pose that was current when a frame was captured. Without a motor
+          // there is no pose to record, and camera motion goes uncompensated.
+          if (driving) {
             const auto pos = motor->get_position(g);
             filter.push_gimbal_sample(t_s, pos.first, pos.second);
+          }
 
-            const auto opt = det->try_pop(tick);
+          // One observation per camera frame, with or without a detection.
+          const auto opt = det->try_pop(tick);
+          if (opt.has_value() && opt->detection_.has_value()) {
+            state = State::Tracking;
+            last_detection = now;
+          }
+
+          // True when we have something trustworthy to aim at.
+          bool aiming = false;
+
+          if (trk.filter_enabled_) {
             if (opt.has_value()) {
-              state = State::Tracking;
-              last_detection = now;
-            }
-
-            // True when we have something trustworthy to aim at.
-            bool aiming = false;
-
-            if (trk.filter_enabled_) {
-              // Predict every tick whether or not a detection arrived; that
-              // is what lets the gimbal keep tracking between fixes.
-              const auto est = filter.step(dt_s, opt, t_s);
+              est = filter.step(*opt, patronus::core::steady_now_s());
 
               // Publish for the overlay whenever there is an estimate, not only
               // when we are aiming. A coasting prediction is exactly what an
@@ -239,87 +263,92 @@ int main(int argc, char *argv[]) {
               // hide the one moment the filter is interesting.
               if (est.has_value()) {
                 patronus::tracking::PredictionSample sample;
-                sample.publish_t_s = t_s;
+                sample.publish_t_s = est->time_s();
                 sample.u_norm = (est->error_u_px() + half_w) / det_w;
                 sample.v_norm = (est->error_v_px() + half_h) / det_h;
-                const auto lead = est->predicted_error(lead_s);
-                sample.lead_u_norm = (lead.cx_ + half_w) / det_w;
-                sample.lead_v_norm = (lead.cy_ + half_h) / det_h;
                 sample.vu_norm_s = est->vu() / det_w;
                 sample.vv_norm_s = est->vv() / det_h;
-                sample.box_w_norm = est->box_w_px() / det_w;
-                sample.box_h_norm = est->box_h_px() / det_h;
-                sample.sigma_norm = std::max(est->sigma_u_px(), est->sigma_v_px()) / det_w;
-                sample.coast_ticks = est->coast_ticks();
+                sample.camera_vu_norm_s = est->camera_vu() / det_w;
+                sample.camera_vv_norm_s = est->camera_vv() / det_h;
+                sample.sigma_u_norm = est->sigma_u_px() / det_w;
+                sample.sigma_v_norm = est->sigma_v_px() / det_h;
+                const patronus::core::Point accepted = est->detection_error_px();
+                sample.detection_u_norm = (accepted.cx_ + half_w) / det_w;
+                sample.detection_v_norm = (accepted.cy_ + half_h) / det_h;
+                sample.detection_frame_id = est->detection_frame_id();
                 sample.measured = est->measured();
                 predictions->publish(g, sample);
-              }
 
-              // coast_ticks() counts ticks since the last accepted
-              // measurement, so a rising value means the gate is rejecting
-              // everything and the estimate is extrapolating.
-              const bool fresh = now - last_detection < stale_after;
-              aiming = est.has_value() && fresh;
-              if (aiming) {
-                const patronus::core::Point error{est->error_u_px(), est->error_v_px()};
-                const patronus::core::Point velocity{est->vu(), est->vv()};
-                const auto cmd = patronus::tracking::compute_control_sensor(error, velocity, gains);
-                motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
-                                    cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+                // Steer by where the target is now, not where it was when the
+                // frame was captured: the estimate is extrapolated across the
+                // pipeline latency and placed at the gimbal's current pose.
+                cmd = patronus::tracking::compute_control_sensor(est->lead_error(),
+                                                                 est->lead_velocity(), gains);
+              } else {
+                // No track: never seeded, or dropped after coasting too long.
+                predictions->clear(g);
               }
-            } else if (opt.has_value()) {
-              // Filter disabled: drive straight off the raw detection.
-              const patronus::core::Detection d = *opt;
-              const patronus::core::Point center{d.left_ + (d.width_ / 2.0F),
-                                                 d.top_ + (d.height_ / 2.0F)};
-              const auto error = patronus::tracking::detection_error(center, pipe.detection_width_,
-                                                                     pipe.detection_height_);
-              const auto cmd = patronus::tracking::compute_control_sensor(
-                error, patronus::core::Point{0.0F, 0.0F}, gains);
+            }
+
+            const bool fresh = now - last_detection < stale_after;
+            aiming = est.has_value() && fresh;
+            if (aiming && driving) {
               motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
                                   cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
-              aiming = true;
             }
-
-            last_tick = now;
-
-            if (aiming) {
-              continue;
-            }
-
-            // Not aiming. Re-enter Tracking as soon as a raw detection
-            // arrives, even if it has not yet been accepted by the filter,
-            // so the state machine cannot latch into ReturningHome while a
-            // target is plainly visible.
-            if (opt.has_value() && state == State::ReturningHome) {
-              state = State::Tracking;
-            }
-
-            if (state == State::ReturningHome) {
-              if (motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
-                                        trk.home_return_max_velocity_)) {
-                state = State::AtHome;
-                motor->set_velocity(g, 0.0F, 0.0F);
-                g_print("Tracking gimbal %zu: at home position\n", g);
-              }
-              continue;
-            }
-
-            // Hold position; start the home return once the delay expires.
-            motor->set_velocity(g, 0.0F, 0.0F);
-            if (state == State::Tracking && trk.home_return_enabled_ &&
-                now - last_detection >= std::chrono::milliseconds(trk.home_return_delay_ms_)) {
-              state = State::ReturningHome;
-              g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
-            }
+          } else if (opt.has_value() && opt->detection_.has_value() && driving) {
+            // Filter disabled: drive straight off the raw detection.
+            const patronus::core::Detection d = *opt->detection_;
+            const patronus::core::Point center{d.left_ + (d.width_ / 2.0F),
+                                               d.top_ + (d.height_ / 2.0F)};
+            const auto error = patronus::tracking::detection_error(center, pipe.detection_width_,
+                                                                   pipe.detection_height_);
+            const auto raw_cmd = patronus::tracking::compute_control_sensor(
+              error, patronus::core::Point{0.0F, 0.0F}, gains);
+            motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+            aiming = true;
           }
 
-          // Never leave a gimbal commanded on thread exit, and stop drawing a
-          // prediction nothing is maintaining any more.
+          // Everything below holds position or returns home, which is motor
+          // work only.
+          if (aiming || !driving) {
+            continue;
+          }
+
+          // Not aiming. Re-enter Tracking as soon as a raw detection
+          // arrives, even if it has not yet been accepted by the filter,
+          // so the state machine cannot latch into ReturningHome while a
+          // target is plainly visible.
+          if (opt.has_value() && opt->detection_.has_value() && state == State::ReturningHome) {
+            state = State::Tracking;
+          }
+
+          if (state == State::ReturningHome) {
+            if (motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
+                                      trk.home_return_max_velocity_)) {
+              state = State::AtHome;
+              motor->set_velocity(g, 0.0F, 0.0F);
+              g_print("Tracking gimbal %zu: at home position\n", g);
+            }
+            continue;
+          }
+
+          // Hold position; start the home return once the delay expires.
           motor->set_velocity(g, 0.0F, 0.0F);
-          predictions->clear(g);
-        });
-      }
+          if (state == State::Tracking && trk.home_return_enabled_ &&
+              now - last_detection >= std::chrono::milliseconds(trk.home_return_delay_ms_)) {
+            state = State::ReturningHome;
+            g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
+          }
+        }
+
+        // Never leave a gimbal commanded on thread exit, and stop drawing a
+        // prediction nothing is maintaining any more.
+        if (driving)
+          motor->set_velocity(g, 0.0F, 0.0F);
+        predictions->clear(g);
+      });
     }
   }
 

@@ -49,20 +49,21 @@ namespace {
   }
 
   /// Bring the target to the centre of frame with a plain proportional loop on the
-  /// raw detection. The IMM is deliberately not used here: it is the thing being
+  /// raw detection. The target filter is deliberately not used here: it is the thing being
   /// calibrated, and its velocity estimate depends on the focal length being
   /// solved for.
   bool centre_target(comm::CandleMotor &motor, size_t gimbal, uint32_t detection_w,
                      uint32_t detection_h,
-                     patronus::core::LatestValue<patronus::core::Detection> &detections,
+                     patronus::core::LatestValue<patronus::core::FrameObservation> &detections,
                      std::atomic<bool> &running) {
     const auto deadline = std::chrono::steady_clock::now() + k_center_timeout;
     bool seen_target = false;
 
     while (running && std::chrono::steady_clock::now() < deadline) {
-      const auto det = detections.try_pop(k_pop_timeout);
-      if (!det.has_value())
+      const auto frame = detections.try_pop(k_pop_timeout);
+      if (!frame.has_value() || !frame->detection_.has_value())
         continue;
+      const auto &det = frame->detection_;
       seen_target = true;
 
       const float center_u = det->left_ + (det->width_ * 0.5F);
@@ -89,7 +90,7 @@ namespace {
 
 int run_focal_calibration(comm::CandleMotor &motor, size_t gimbal,
                           const patronus::config::GimbalConfig &gimbal_cfg,
-                          patronus::core::LatestValue<patronus::core::Detection> &detections,
+                          patronus::core::LatestValue<patronus::core::FrameObservation> &detections,
                           uint32_t detection_w, uint32_t detection_h, float focal_x_px,
                           float focal_y_px, std::atomic<bool> &running) {
   (void)gimbal_cfg;
@@ -138,10 +139,12 @@ int run_focal_calibration(comm::CandleMotor &motor, size_t gimbal,
     std::vector<float> xs;
     xs.reserve(k_samples_per_step);
     for (int i = 0; i < k_samples_per_step && running; ++i) {
-      const auto det = detections.try_pop(k_pop_timeout);
-      if (det.has_value())
-        xs.push_back(det->left_ + (det->width_ * 0.5F));
-      else
+      // Every frame publishes now, with or without a target, so only the frames
+      // that have one count as samples.
+      const auto frame = detections.try_pop(k_pop_timeout);
+      if (frame.has_value() && frame->detection_.has_value())
+        xs.push_back(frame->detection_->left_ + (frame->detection_->width_ * 0.5F));
+      else if (!frame.has_value())
         std::this_thread::sleep_for(k_sample_period);
     }
 

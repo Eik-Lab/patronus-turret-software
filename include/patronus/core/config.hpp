@@ -51,7 +51,7 @@ struct PipelineConfig {
   float focal_x_px_{0.0f}; ///< Horizontal focal length, pixels.
   float focal_y_px_{0.0f}; ///< Vertical focal length, pixels.
 
-  /// Draw the IMM filter's prediction on the video overlay.
+  /// Draw the target filter's prediction on the video overlay.
   ///
   /// The overlay is drawn by the video thread from predictions published by the
   /// tracking threads, so it keeps working (and coasting) while detections are
@@ -59,7 +59,7 @@ struct PipelineConfig {
   /// cosmetic: turning it off does not change what the motors are commanded.
   bool draw_predictions_{true};
 
-  /// Look-ahead horizon for the drawn prediction vector, seconds.
+  /// Look-ahead horizon for the drawn velocity arrow, seconds.
   ///
   /// This is a *visualisation* horizon, chosen to be visible at the frame rates
   /// involved. It is deliberately independent of the per-gimbal `lead_gain`,
@@ -84,14 +84,25 @@ struct TrackingConfig {
   int home_return_delay_ms_{500};        ///< Wait (ms) before initiating return.
   float home_return_max_velocity_{1.5f}; ///< Max return velocity (rad/s motor shaft).
 
-  // --- IMM target filter -------------------------------------------------
-  bool filter_enabled_{true};            ///< Run the IMM instead of raw detections.
-  float filter_meas_sigma_px_{4.0f};     ///< Detection position sigma (1σ, pixels).
-  float filter_qc_{2000.0f};             ///< Process-noise spectral density (px²/s³).
-  float filter_gate_{9.21f};             ///< Innovation gate (χ², 2 dof at 99%).
-  float filter_imm_transition_p_{0.02f}; ///< Uniform mode-switch probability per step.
-  float filter_adapt_window_{30};        ///< Adaptive-noise window length.
-  int filter_tick_ms_{10};               ///< Filter tick period (ms).
+  // --- Target filter (kalman-cpp constant-acceleration tracker) ------------
+  bool filter_enabled_{true};        ///< Run the filter instead of raw detections.
+  float filter_meas_sigma_px_{8.0f}; ///< Detection position sigma (1σ, pixels).
+  float filter_gate_{9.21f};         ///< Innovation gate (χ², 2 dof at 99%).
+  int filter_tick_ms_{10};           ///< Tracking-loop tick: motor command period (ms).
+
+  /// White-jerk spectral density, px²/s⁵: the one tuning knob that matters.
+  /// The target's acceleration can change by `sqrt(q * T)` px/s² within `T`
+  /// seconds. Raise to follow sharper manoeuvres, lower for a smoother estimate.
+  float filter_q_jerk_{2.0e5f};
+
+  /// Extra distrust of low-confidence detections: the position variance is
+  /// scaled by `1 + filter_conf_noise_scale * (1 - confidence)`.
+  float filter_conf_noise_scale_{10.0f};
+
+  /// Drop the track after this long without an accepted detection (ms), so the
+  /// next detection re-seeds the filter instead of being gated against an
+  /// estimate that has long since drifted away. 0 disables.
+  int filter_max_coast_ms_{1000};
 
   /// Age of a detection at the moment it reaches the tracking loop, in ms.
   ///
