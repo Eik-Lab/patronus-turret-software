@@ -1,6 +1,0 @@
-[submodule "deps/CANdle-SDK"]
-	path = deps/CANdle-SDK
-	url = https://codeberg.org/fatum/CANdle-SDK-CPP17.git
-[submodule "deps/kalman-cpp"]
-	path = deps/kalman-cpp
-	url = git@github.com:ioeftedal/kalman-cpp.git

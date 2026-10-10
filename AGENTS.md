@@ -197,7 +197,7 @@ Key source layout:
 | `src/tracking/` | Aim control math |
 | `src/comm/` | CAN bus motor driver implementation |
 | `src/main.cpp` | Entry point, thread orchestration |
-| `deps/CANdle-SDK/` | CAN bus motor SDK |
+| `build/_deps/` | Third-party sources (CANdle-SDK, kalman-cpp), fetched by CMake `FetchContent` |
 | `config/deepstream/` | YOLOv8 inference configs |
 
 ---
@@ -208,7 +208,7 @@ Key source layout:
 2. **No commits without user confirmation** — stage and present changes; do not commit until explicitly told.
 3. **No AI-generated GitHub Issues** — do not open, close, or reference them.
 4. **No file deletions** unless explicitly requested.
-5. **Never modify submodule files**.
+5. **Never modify third-party sources** fetched into `build/_deps/`; bump the pinned `GIT_TAG` in `CMakeLists.txt` instead.
 6. **Never commit secrets, keys, or credentials.**
 
 ### Workflow
