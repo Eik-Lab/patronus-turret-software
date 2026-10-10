@@ -1,1 +1,25 @@
-/nix/store/mhdbz6gp642kdzwhpx6slgjyl85zhlbc-pre-commit-config.json
+default_stages: [pre-commit]
+exclude: ^deps/
+repos:
+  - repo: local
+    hooks:
+      - id: treefmt
+        name: treefmt
+        entry: treefmt --fail-on-change
+        language: system
+        files: '\.(nix|c|cc|cpp|h|hh|hpp|cu|cuh|cmake)$|(^|/)CMakeLists\.txt$'
+      - id: clang-tidy
+        name: clang-tidy
+        entry: clang-tidy --fix
+        language: system
+        types_or: [c, c++, objective-c]
+      - id: deadnix
+        name: deadnix
+        entry: deadnix --fail
+        language: system
+        files: '\.nix$'
+      - id: typos
+        name: typos
+        entry: typos --force-exclude
+        language: system
+        types: [text]
