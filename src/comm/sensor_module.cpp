@@ -3,9 +3,11 @@
 #include <glib.h>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +34,26 @@ namespace {
     g_warning("Unsupported baud rate string '%.*s', defaulting to B115200",
               static_cast<int>(baud_str.size()), baud_str.data());
     return B115200;
+  }
+
+  // True when the tty belongs to the MAB CANdle adapter. The CANdle exposes a
+  // CDC-ACM interface that enumerates as /dev/ttyACM*, so with no sensor
+  // plugged in the default port is the motor bus, not a sensor.
+  bool is_candle_port(const char *portname) {
+    char resolved[PATH_MAX]{};
+    if (realpath(portname, resolved) == nullptr)
+      return false;
+    const std::string_view path{resolved};
+    const std::string tty_name{path.substr(path.find_last_of('/') + 1)};
+    const std::string vendor_path = "/sys/class/tty/" + tty_name + "/device/../idVendor";
+
+    std::FILE *file = std::fopen(vendor_path.c_str(), "r");
+    if (file == nullptr)
+      return false;
+    char vendor[8]{};
+    const bool have_vendor = std::fgets(vendor, sizeof(vendor), file) != nullptr;
+    std::fclose(file);
+    return have_vendor && std::strncmp(vendor, "0069", 4) == 0;
   }
 
   int serial_open(const char *portname) {
@@ -78,8 +100,8 @@ namespace {
   // Convert NMEA ddmm.mmmm + hemisphere to signed decimal degrees.
   double nmea_to_decimal(double value, char direction) {
     const double degrees = std::floor(value / 100.0);
-    const double minutes = value - degrees * 100.0;
-    double result = degrees + minutes / 60.0;
+    const double minutes = value - (degrees * 100.0);
+    double result = degrees + (minutes / 60.0);
 
     if (direction == 'S' || direction == 'W')
       result = -result;
@@ -88,11 +110,31 @@ namespace {
   }
 
   // Read one complete Distance: or GLL packet from the serial port.
-  // Blocking but bounded: VMIN=0/VTIME=5 caps each read at 0.5 s.
-  bool read_sensor_data(int fd, SensorData &data) {
+  // Returns false on shutdown, read error, or when the port goes away.
+  bool read_sensor_data(int fd, SensorData &data, const std::atomic<bool> &running) {
     std::string line;
 
-    while (true) {
+    while (running.load()) {
+      // Poll rather than rely on VTIME: a hung-up tty makes read() return 0
+      // immediately, which is indistinguishable from a timeout and would spin.
+      pollfd pfd{fd, POLLIN, 0};
+      const int ready = poll(&pfd, 1, 500);
+
+      if (ready < 0) {
+        if (errno == EINTR)
+          continue;
+        g_warning("Sensor poll error: %s", std::strerror(errno));
+        return false;
+      }
+
+      if (ready == 0) // Timeout with no data — keep polling.
+        continue;
+
+      if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        g_warning("Sensor serial port disconnected");
+        return false;
+      }
+
       char character = '\0';
       const ssize_t bytes_read = read(fd, &character, 1);
 
@@ -103,8 +145,10 @@ namespace {
         return false;
       }
 
-      if (bytes_read == 0) // Timeout with no data — keep polling.
-        continue;
+      if (bytes_read == 0) {
+        g_warning("Sensor serial port closed");
+        return false;
+      }
 
       if (character == '\r')
         continue;
@@ -148,6 +192,8 @@ namespace {
 
       line.clear();
     }
+
+    return false;
   }
 
 } // namespace
@@ -155,6 +201,13 @@ namespace {
 void run_sensor_thread(const std::string &port, const std::string &baud_str,
                        std::atomic<bool> &running) {
   const speed_t baud_speed = baud_string_to_speed(baud_str);
+
+  if (is_candle_port(port.c_str())) {
+    g_warning("Sensor module: %s is the CANdle adapter, not a sensor — sensor disabled. "
+              "Set [sensor] port to the sensor's device or enabled=false.",
+              port.c_str());
+    return;
+  }
 
   const int fd = serial_open(port.c_str());
   if (fd < 0) {
@@ -173,8 +226,9 @@ void run_sensor_thread(const std::string &port, const std::string &baud_str,
   while (running.load()) {
     SensorData data{};
 
-    if (!read_sensor_data(fd, data)) {
-      g_warning("Failed to read sensor data");
+    if (!read_sensor_data(fd, data, running)) {
+      if (running.load())
+        g_warning("Sensor module: stopped reading %s", port.c_str());
       break;
     }
 
