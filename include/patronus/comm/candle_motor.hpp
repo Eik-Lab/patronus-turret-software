@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,9 @@ namespace patronus::comm {
 /// Wraps the CANdle-SDK's mab::Candle (USB-to-CAN adapter) and two
 /// mab::MD (motor controller) instances per gimbal. Operates in
 /// VELOCITY_PID mode. Supports multiple gimbals on a single CAN bus.
+///
+/// @note The per-gimbal calls are safe to make from one thread per gimbal: each
+///       CAN request/response exchange is serialised on the shared CANdle.
 class CandleMotor {
 public:
   /// @brief Construct for one or more gimbals on one CANdle bus.
@@ -71,9 +75,13 @@ public:
                       float max_velocity_rad_s = 0.0F);
 
   /// @brief Access raw pan MD for a specific gimbal (diagnostic use).
+  /// @warning Calls on the returned MD bypass the bus lock; do not use while
+  ///          tracking threads are running.
   mab::MD *pan_motor(size_t gimbal);
 
   /// @brief Access raw tilt MD for a specific gimbal (diagnostic use).
+  /// @warning Calls on the returned MD bypass the bus lock; do not use while
+  ///          tracking threads are running.
   mab::MD *tilt_motor(size_t gimbal);
 
   /// @brief Disable PWM output on all motors and detach the CANdle device.
@@ -82,8 +90,6 @@ public:
 
 private:
   bool enable_pds();
-  // Discover MDs on the bus; empty result means a required CAN ID is missing.
-  std::vector<uint16_t> try_resolve_motor_ids();
 
   config::CanBusConfig bus_cfg_;
   std::vector<config::GimbalConfig> gimbals_;
@@ -92,6 +98,9 @@ private:
   std::vector<std::unique_ptr<mab::MD>> tilt_motors_;
   std::unique_ptr<mab::Pds> pds_;
   std::vector<std::shared_ptr<mab::PowerStage>> power_stages_;
+  // Serialises CAN exchanges. The SDK locks the USB write and the USB read
+  // separately, so concurrent callers would otherwise read each other's replies.
+  std::mutex bus_mutex_;
 };
 
 } // namespace patronus::comm

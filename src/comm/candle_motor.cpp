@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
@@ -78,45 +79,6 @@ bool CandleMotor::enable_pds() {
   return true;
 }
 
-// ── Motor discovery ──────────────────────────────────────────────────────────
-
-std::vector<uint16_t> CandleMotor::try_resolve_motor_ids() {
-  auto discovered = mab::MD::discoverMDs(candle_);
-
-  const size_t needed = gimbals_.size() * 2;
-  const bool ok = discovered.size() >= needed;
-  std::FILE *out = ok ? stdout : stderr;
-
-  if (ok)
-    std::printf("CandleMotor: discovered %zu MDs on bus\n", discovered.size());
-  else
-    std::fprintf(out, "CandleMotor: found %zu MD(s) on bus — need %zu for %zu gimbal(s)\n",
-                 discovered.size(), needed, gimbals_.size());
-  for (auto id : discovered)
-    std::fprintf(out, "  — MD%u\n", id);
-  if (!ok)
-    return {};
-
-  const auto on_bus = [&discovered](uint16_t id) {
-    return std::find(discovered.begin(), discovered.end(), id) != discovered.end();
-  };
-
-  for (size_t g = 0; g < gimbals_.size(); ++g) {
-    if (!on_bus(gimbals_[g].pan_node_id_)) {
-      std::fprintf(stderr, "CandleMotor: configured pan node %u (gimbal %zu) not found on bus\n",
-                   gimbals_[g].pan_node_id_, g);
-      return {};
-    }
-    if (!on_bus(gimbals_[g].tilt_node_id_)) {
-      std::fprintf(stderr, "CandleMotor: configured tilt node %u (gimbal %zu) not found on bus\n",
-                   gimbals_[g].tilt_node_id_, g);
-      return {};
-    }
-  }
-
-  return discovered;
-}
-
 // ── Initialisation ───────────────────────────────────────────────────────────
 
 bool CandleMotor::init() {
@@ -137,15 +99,11 @@ bool CandleMotor::init() {
     return false;
   }
 
-  auto ids = try_resolve_motor_ids();
-  if (ids.empty()) {
-    disable();
-    return false;
-  }
-
   pan_motors_.resize(gimbals_.size());
   tilt_motors_.resize(gimbals_.size());
 
+  // Motors are addressed by their configured node ids, with no bus scan; a
+  // wrong or absent id surfaces as a failed MD::init() below.
   for (size_t g = 0; g < gimbals_.size(); ++g) {
     pan_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].pan_node_id_, candle_);
     tilt_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].tilt_node_id_, candle_);
@@ -153,7 +111,8 @@ bool CandleMotor::init() {
     // Shared velocity-PID settings for both axes
     for (auto *md : {pan_motors_[g].get(), tilt_motors_[g].get()}) {
       if (md->init() != mab::MD::Error_t::OK) {
-        std::fprintf(stderr, "CandleMotor: MD%u init failed\n", md->m_canId);
+        std::fprintf(stderr, "CandleMotor: MD%u (gimbal %zu) did not respond — check node id\n",
+                     md->m_canId, g);
         disable();
         return false;
       }
@@ -185,6 +144,7 @@ void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s)
   pan_rad_s = std::clamp(pan_rad_s, -max_vel, max_vel);
   tilt_rad_s = std::clamp(tilt_rad_s, -max_vel, max_vel);
 
+  const std::lock_guard<std::mutex> lock(bus_mutex_);
   pan->setTargetVelocity(pan_rad_s);
   tilt->setTargetVelocity(tilt_rad_s);
 }
@@ -194,6 +154,7 @@ std::pair<float, float> CandleMotor::get_velocity(size_t gimbal) {
     return {0.0F, 0.0F};
   if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
     return {0.0F, 0.0F};
+  const std::lock_guard<std::mutex> lock(bus_mutex_);
   const auto pv = pan_motors_[gimbal]->getVelocity();
   const auto tv = tilt_motors_[gimbal]->getVelocity();
   return {pv.first, tv.first};
@@ -204,6 +165,7 @@ std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
     return {0.0F, 0.0F};
   if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
     return {0.0F, 0.0F};
+  const std::lock_guard<std::mutex> lock(bus_mutex_);
   const auto pp = pan_motors_[gimbal]->getPosition();
   const auto tp = tilt_motors_[gimbal]->getPosition();
   return {pp.first, tp.first};
@@ -217,6 +179,7 @@ bool CandleMotor::calibrate_home(size_t gimbal) {
   if (pan == nullptr || tilt == nullptr)
     return false;
 
+  const std::lock_guard<std::mutex> lock(bus_mutex_);
   bool ok = true;
   for (auto *md : {pan, tilt}) {
     ok &= (md->zero() == mab::MD::Error_t::OK);
@@ -260,6 +223,7 @@ mab::MD *CandleMotor::tilt_motor(size_t gimbal) {
 // ── Disable ──────────────────────────────────────────────────────────────────
 
 void CandleMotor::disable() {
+  const std::lock_guard<std::mutex> lock(bus_mutex_);
   // Silence SDK logging while tearing down motors
   const auto prev_verbosity = Logger::g_m_verbosity;
   Logger::g_m_verbosity = Logger::Verbosity_E::SILENT;
