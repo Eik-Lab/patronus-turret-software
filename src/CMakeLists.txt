@@ -21,24 +21,6 @@ endif()
 set(SRC_PATH /opt/nvidia/deepstream/deepstream-${DS_VERSION})
 set(SRC_INC2 ${SRC_PATH}/sources/includes)
 
-set(CANDLESDK_BUILD_EXAMPLES
-    OFF
-    CACHE BOOL "" FORCE)
-set(CANDLESDK_BUILD_CANDLETOOL
-    OFF
-    CACHE BOOL "" FORCE)
-set(CANDLE_BUILD_STATIC
-    ON
-    CACHE BOOL "" FORCE)
-
-# CANdle-SDK first, deliberately. CMAKE_CXX_CLANG_TIDY is set below and applies
-# to every target created after it, so pulling in third-party code afterwards
-# would lint that code against our style rules -- it uses `fileRaw`/`resetClr`
-# and trips --warnings-as-errors, which fails the build for reasons unrelated to
-# us.
-add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk
-                 EXCLUDE_FROM_ALL)
-
 # clang-tidy integration Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
 find_program(CLANG_TIDY NAMES clang-tidy)
 # Empty as well as "OFF": the top level normalises `-DCMAKE_CXX_CLANG_TIDY=OFF`
