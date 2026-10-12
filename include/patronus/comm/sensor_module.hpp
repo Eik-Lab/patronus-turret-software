@@ -9,9 +9,9 @@ namespace patronus::comm {
 
 /// @brief Sensor data read from the serial port.
 struct SensorData {
-  float distance = 0.0F;  ///< Ultrasonic distance (cm).
-  double latitude = 0.0;  ///< GPS latitude (decimal degrees).
-  double longitude = 0.0; ///< GPS longitude (decimal degrees).
+  float distance = 0.0F;
+  double latitude = 0.0;
+  double longitude = 0.0;
   bool has_distance = false;
   bool has_gps = false;
 };
