@@ -17,6 +17,20 @@ struct PipelineConfig {
   uint32_t muxer_width_{1920};     ///< Stream muxer output width.
   uint32_t muxer_height_{1088};    ///< Stream muxer output height.
   bool enabled_{true};             ///< Whether this pipeline is active.
+
+  /// Pixel space in which the detector reports bounding boxes.
+  uint32_t detection_width_{1920};  ///< Detection-space width in pixels.
+  uint32_t detection_height_{1088}; ///< Detection-space height in pixels.
+
+  /// Focal length in pixels, in *muxed* coordinates.
+  float focal_x_px_{0.0f}; ///< Horizontal focal length, pixels.
+  float focal_y_px_{0.0f}; ///< Vertical focal length, pixels.
+
+  /// Draw the target filter's prediction on the video overlay.
+  bool draw_predictions_{true};
+
+  /// Look-ahead horizon for the drawn velocity arrow, seconds.
+  float prediction_lead_s_{0.15f};
 };
 
 /// @brief CAN bus configuration for a single gimbal.
@@ -34,6 +48,34 @@ struct TrackingConfig {
   float home_tolerance_rad_{0.05f};      ///< Deadband for "at home" (~3°).
   int home_return_delay_ms_{500};        ///< Wait (ms) before initiating return.
   float home_return_max_velocity_{1.5f}; ///< Max return velocity (rad/s motor shaft).
+
+  // --- Target filter (kalman-cpp constant-acceleration tracker) ------------
+  bool filter_enabled_{true};        ///< Run the filter instead of raw detections.
+  float filter_meas_sigma_px_{8.0f}; ///< Detection position sigma (1σ, pixels).
+  float filter_gate_{9.21f};         ///< Innovation gate (χ², 2 dof at 99%).
+  int filter_tick_ms_{10};           ///< Tracking-loop tick: motor command period (ms).
+
+  /// White-jerk spectral density, px²/s⁵: the one tuning knob that matters.
+  /// The target's acceleration can change by `sqrt(q * T)` px/s² within `T`
+  /// seconds. Raise to follow sharper manoeuvres, lower for a smoother estimate.
+  float filter_q_jerk_{2.0e5f};
+
+  /// Extra distrust of low-confidence detections: the position variance is
+  /// scaled by `1 + filter_conf_noise_scale * (1 - confidence)`.
+  float filter_conf_noise_scale_{10.0f};
+
+  /// Drop the track after this long without an accepted detection (ms), so the
+  /// next detection re-seeds the filter instead of being gated against an
+  /// estimate that has long since drifted away. 0 disables.
+  int filter_max_coast_ms_{1000};
+
+  /// Age of a detection at the moment it reaches the tracking loop, in ms.
+  int filter_pipeline_latency_ms_{20};
+
+  // --- Control law -------------------------------------------------------
+  float kp_{0.006f};      ///< Proportional gain (per pixel of error).
+  float kd_{0.0f};        ///< Derivative gain on filtered velocity.
+  float lead_gain_{0.0f}; ///< Lead term on filtered velocity (s).
 };
 
 /// @brief Shared CAN bus settings (apply to all gimbals on the bus).

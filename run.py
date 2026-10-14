@@ -312,14 +312,15 @@ def ensure_built(dry_run, args):
             eprint("error: cmake configuration failed")
             sys.exit(1)
 
-    if not os.path.isfile(INFERENCE_BIN):
-        print("Building...")
-        cmd = ["cmake", "--build", BUILD_DIR, "-j", str(os.cpu_count() or 4)]
-        ret = run_command(cmd, dry_run=dry_run)
-        if ret != 0:
-            eprint("error: build failed")
-            sys.exit(1)
-        print("Build complete.\n")
+    # Always invoke the build: it is incremental, and skipping it whenever the
+    # binary exists silently runs a stale binary after a source change.
+    print("Building...")
+    cmd = ["cmake", "--build", BUILD_DIR, "-j", str(os.cpu_count() or 4)]
+    ret = run_command(cmd, dry_run=dry_run)
+    if ret != 0:
+        eprint("error: build failed")
+        sys.exit(1)
+    print("Build complete.\n")
 
 
 def cmd_run(args, remaining_argv):
