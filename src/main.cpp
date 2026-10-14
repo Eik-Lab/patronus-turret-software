@@ -107,13 +107,14 @@ int main(int argc, char *argv[]) {
   // UDP command listener thread (e.g. "shoot" from the client console)
   if (cfg.command_.enabled_) {
     command_thread = std::thread([&]() {
-      patronus::comm::runCommandThread(cfg.command_.host_, cfg.command_.port_, running);
+      patronus::comm::runCommandThread(cfg.command_.command_host_, cfg.command_.command_port_,
+                                       running);
     });
   }
 
   if (cfg.mode_ != "mono" && cfg.rgb_.enabled_) {
     rgb_thread = std::thread([&]() {
-      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb);
+      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb, predictions_rgb);
     });
   }
 

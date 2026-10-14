@@ -144,7 +144,7 @@ void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s)
   pan_rad_s = std::clamp(pan_rad_s, -max_vel, max_vel);
   tilt_rad_s = std::clamp(tilt_rad_s, -max_vel, max_vel);
 
-  const std::lock_guard<std::mutex> lock(bus_mutex_);
+  const std::scoped_lock lock(bus_mutex_);
   pan->setTargetVelocity(pan_rad_s);
   tilt->setTargetVelocity(tilt_rad_s);
 }
@@ -154,7 +154,7 @@ std::pair<float, float> CandleMotor::get_velocity(size_t gimbal) {
     return {0.0F, 0.0F};
   if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
     return {0.0F, 0.0F};
-  const std::lock_guard<std::mutex> lock(bus_mutex_);
+  const std::scoped_lock lock(bus_mutex_);
   const auto pv = pan_motors_[gimbal]->getVelocity();
   const auto tv = tilt_motors_[gimbal]->getVelocity();
   return {pv.first, tv.first};
@@ -165,7 +165,7 @@ std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
     return {0.0F, 0.0F};
   if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
     return {0.0F, 0.0F};
-  const std::lock_guard<std::mutex> lock(bus_mutex_);
+  const std::scoped_lock lock(bus_mutex_);
   const auto pp = pan_motors_[gimbal]->getPosition();
   const auto tp = tilt_motors_[gimbal]->getPosition();
   return {pp.first, tp.first};
@@ -206,7 +206,7 @@ mab::MD *CandleMotor::tilt_motor(size_t gimbal) {
 // ── Disable ──────────────────────────────────────────────────────────────────
 
 void CandleMotor::disable() {
-  const std::lock_guard<std::mutex> lock(bus_mutex_);
+  const std::scoped_lock lock(bus_mutex_);
   // Silence SDK logging while tearing down motors
   const auto prev_verbosity = Logger::g_m_verbosity;
   Logger::g_m_verbosity = Logger::Verbosity_E::SILENT;
