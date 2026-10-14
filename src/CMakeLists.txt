@@ -52,7 +52,7 @@ set(INFERENCE_SOURCES
     tracking/prediction_overlay.cpp
     comm/candle_motor.cpp
     comm/command_listener.cpp
-)
+    comm/sensor_module.cpp)
 
 add_executable(inference ${INFERENCE_SOURCES})
 

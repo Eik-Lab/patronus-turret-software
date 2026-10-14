@@ -404,7 +404,7 @@ std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observa
 }
 
 void TargetFilter::reset() noexcept {
-  impl_->reset();
+  (*impl_).reset();
 }
 
 } // namespace patronus::tracking

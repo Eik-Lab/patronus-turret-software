@@ -2,6 +2,7 @@
 
 #include <glib.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -61,10 +62,8 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   cfg.muxer_height_ = read_uint<uint32_t>(kf, group, "muxer_height", 1088);
   cfg.focal_x_px_ = read_float(kf, group, "focal_x_px", 0.0F);
   cfg.focal_y_px_ = read_float(kf, group, "focal_y_px", 0.0F);
-  if (cfg.focal_x_px_ < 0.0F)
-    cfg.focal_x_px_ = 0.0F;
-  if (cfg.focal_y_px_ < 0.0F)
-    cfg.focal_y_px_ = 0.0F;
+  cfg.focal_x_px_ = std::max(cfg.focal_x_px_, 0.0F);
+  cfg.focal_y_px_ = std::max(cfg.focal_y_px_, 0.0F);
   cfg.enabled_ = read_bool(kf, group, "enabled", true);
   cfg.detection_width_ = read_uint<uint32_t>(kf, group, "detection_width", 1920);
   cfg.detection_height_ = read_uint<uint32_t>(kf, group, "detection_height", 1088);
@@ -123,8 +122,7 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
     cfg.filter_tick_ms_ = 10;
   cfg.filter_pipeline_latency_ms_ =
     static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms", 20));
-  if (cfg.filter_pipeline_latency_ms_ < 0)
-    cfg.filter_pipeline_latency_ms_ = 0;
+  cfg.filter_pipeline_latency_ms_ = std::max(cfg.filter_pipeline_latency_ms_, 0);
   cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
   if (cfg.filter_conf_noise_scale_ < 0.0F)
     cfg.filter_conf_noise_scale_ = 10.0F;
@@ -150,8 +148,8 @@ static SensorConfig read_sensor(GKeyFile *kf, const gchar *group) {
 static CommandConfig read_command(GKeyFile *kf, const gchar *group) {
   CommandConfig cfg;
   cfg.enabled_ = read_bool(kf, group, "enabled", false);
-  cfg.host_ = read_string(kf, group, "host", "0.0.0.0");
-  cfg.port_ = read_uint16(kf, group, "port", 5002);
+  cfg.command_host_ = read_string(kf, group, "command_host", "0.0.0.0");
+  cfg.command_port_ = read_uint<uint16_t>(kf, group, "command_port", 5002);
   return cfg;
 }
 
@@ -209,7 +207,7 @@ SystemConfig load_config(const std::string &path) {
     found_numbered = true;
     // Numbered groups get distinct default CAN IDs; tilt sits 2 above pan,
     // matching the documented single-gimbal default (16, 18).
-    const uint16_t fallback_pan = static_cast<uint16_t>(16 + (i - 1) * 2);
+    const uint16_t fallback_pan = static_cast<uint16_t>(16 + ((i - 1) * 2));
     const uint16_t fallback_tilt = static_cast<uint16_t>(fallback_pan + 2);
     sys.gimbals_.push_back(read_gimbal(kf, can_group, fallback_pan, fallback_tilt));
 

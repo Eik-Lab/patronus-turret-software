@@ -111,7 +111,7 @@ public:
   /// @brief Publish a new value, waking one blocked consumer.
   void push(T value) {
     {
-      std::lock_guard<std::mutex> lock(mtx_);
+      std::scoped_lock lock(mtx_);
       slot_ = std::move(value);
     }
     cv_.notify_one();
@@ -136,7 +136,7 @@ public:
   /// sample, so that a queued value captured before the change is not mistaken
   /// for one captured after it.
   void clear() {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::scoped_lock lock(mtx_);
     slot_.reset();
   }
 };

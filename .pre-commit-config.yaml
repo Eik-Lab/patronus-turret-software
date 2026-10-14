@@ -10,7 +10,7 @@ repos:
         files: '\.(nix|c|cc|cpp|h|hh|hpp|cu|cuh|cmake)$|(^|/)CMakeLists\.txt$'
       - id: clang-tidy
         name: clang-tidy
-        entry: clang-tidy --fix
+        entry: clang-tidy --fix -p build
         language: system
         types_or: [c, c++, objective-c]
       - id: deadnix
