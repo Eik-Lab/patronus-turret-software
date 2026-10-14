@@ -49,7 +49,6 @@ void handleShoot() {
   "safety-off": skru av safety
   "fire": begynn å skyt
   "hold": stopp å skyt */
-  g_print("SHOOT\n");
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -96,7 +95,6 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
     } else if (name == "dec_exp") {
       decrease_exposure(argument);
     } else {
-      g_print(":CommandListener: Received command: %s\n", command.c_str());
     }
   }
 
