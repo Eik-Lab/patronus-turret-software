@@ -1,4 +1,5 @@
 #include "patronus/comm/candle_motor.hpp"
+#include "patronus/comm/command_listener.hpp"
 #include "patronus/comm/sensor_module.hpp"
 #include "patronus/core/config.hpp"
 #include "patronus/core/state.hpp"
@@ -95,6 +96,7 @@ int main(int argc, char *argv[]) {
   std::thread rgb_thread;
   std::thread mono_thread;
   std::thread sensor_thread;
+  std::thread command_thread;
 
   if (cfg.sensor_.enabled_) {
     sensor_thread = std::thread([&cfg]() {
@@ -102,9 +104,16 @@ int main(int argc, char *argv[]) {
     });
   }
 
-  if (rgb_active) {
-    rgb_thread = std::thread([&cfg]() {
-      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb, predictions_rgb);
+  // UDP command listener thread (e.g. "shoot" from the client console)
+  if (cfg.command_.enabled_) {
+    command_thread = std::thread([&]() {
+      patronus::comm::runCommandThread(cfg.command_.host_, cfg.command_.port_, running);
+    });
+  }
+
+  if (cfg.mode_ != "mono" && cfg.rgb_.enabled_) {
+    rgb_thread = std::thread([&]() {
+      patronus::pipeline::run_pipeline_rgb(cfg.rgb_, detection_rgb);
     });
   }
 
@@ -338,6 +347,8 @@ int main(int argc, char *argv[]) {
     mono_thread.join();
   if (sensor_thread.joinable())
     sensor_thread.join();
+  if (command_thread.joinable())
+    command_thread.join();
   for (auto &t : tracking_threads)
     if (t.joinable())
       t.join();
