@@ -149,7 +149,7 @@ static CommandConfig read_command(GKeyFile *kf, const gchar *group) {
   CommandConfig cfg;
   cfg.enabled_ = read_bool(kf, group, "enabled", false);
   cfg.command_host_ = read_string(kf, group, "command_host", "0.0.0.0");
-  cfg.command_port_ = read_uint16(kf, group, "command_port", 5002);
+  cfg.command_port_ = read_uint<uint16_t>(kf, group, "command_port", 5002);
   return cfg;
 }
 
