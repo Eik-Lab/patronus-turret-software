@@ -199,7 +199,8 @@ int main(int argc, char *argv[]) {
   // UDP command listener thread (e.g. "shoot" from the client console)
   if (cfg.command_.enabled_) {
     command_thread = std::thread([&]() {
-      patronus::comm::runCommandThread(cfg.command_.host_, cfg.command_.port_, running);
+      patronus::comm::runCommandThread(cfg.command_.command_host_, cfg.command_.command_port_,
+                                       running);
     });
   }
 
@@ -252,7 +253,8 @@ int main(int argc, char *argv[]) {
               last_detection = std::chrono::steady_clock::now();
 
               patronus::core::Detection d = *opt;
-              patronus::core::Point center{d.left_ + d.width_ / 2.0F, d.top_ + d.height_ / 2.0F};
+              patronus::core::Point center{d.left_ + (d.width_ / 2.0F),
+                                           d.top_ + (d.height_ / 2.0F)};
 
               auto err = patronus::tracking::compute_control_sensor(center, 0.006F);
 

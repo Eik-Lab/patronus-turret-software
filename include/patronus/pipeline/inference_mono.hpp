@@ -18,9 +18,11 @@ int run_pipeline_mono(const patronus::config::PipelineConfig &config,
 void stop_pipeline_mono();
 
 /// @brief Change the mono camera's exposure time by a relative amount.
-/// @param delta_us Change in microseconds; negative values shorten the exposure.
+/// @param factor Multiplier for the current exposure time; values below 1 shorten the exposure.
+/// @param min_us Lower limit for the new exposure time, in microseconds.
+/// @param max_us Upper limit for the new exposure time, in microseconds.
 /// @note Does nothing if the mono pipeline is not running. Has no lasting effect while the
 ///       camera's ExposureAuto is enabled.
-void adjust_exposure_mono(double delta_us);
+void adjust_exposure_mono(double factor, double min_us, double max_us);
 
 } // namespace patronus::pipeline

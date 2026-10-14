@@ -46,7 +46,8 @@ core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, floa
   float vz = tz - k_weapon_dz;
 
   float pan = std::atan2(vy, vx) * (180.0F / static_cast<float>(M_PI));
-  float tilt = std::atan2(vz, std::sqrt(vx * vx + vy * vy)) * (180.0F / static_cast<float>(M_PI));
+  float tilt =
+    std::atan2(vz, std::sqrt((vx * vx) + (vy * vy))) * (180.0F / static_cast<float>(M_PI));
 
   return {.pan_ = pan, .tilt_ = tilt};
 }

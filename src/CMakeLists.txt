@@ -24,6 +24,9 @@ set(CANDLESDK_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CANDLESDK_BUILD_CANDLETOOL OFF CACHE BOOL "" FORCE)
 set(CANDLE_BUILD_STATIC ON CACHE BOOL "" FORCE)
 
+# Added before clang-tidy is configured so the vendored SDK is not linted
+add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
+
 # clang-tidy integration
 # Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
 find_program(CLANG_TIDY NAMES clang-tidy)
@@ -42,8 +45,6 @@ else()
   endif()
 endif()
 
-add_subdirectory(../deps/CANdle-SDK ${CMAKE_BINARY_DIR}/candlesdk EXCLUDE_FROM_ALL)
-
 set(COMMON_LIBS
     -lnvdsgst_meta -lnvds_meta -lnvds_yml_parser -lnvdsgst_helper
     -lgstreamer-1.0 -lglib-2.0 -lgobject-2.0
@@ -60,6 +61,7 @@ set(INFERENCE_SOURCES
     tracking/aim_control.cpp
     comm/candle_motor.cpp
     comm/command_listener.cpp
+    comm/sensor_module.cpp
 )
 
 add_executable(inference ${INFERENCE_SOURCES})

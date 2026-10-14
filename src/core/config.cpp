@@ -113,8 +113,8 @@ static SensorConfig read_sensor(GKeyFile *kf, const gchar *group) {
 static CommandConfig read_command(GKeyFile *kf, const gchar *group) {
   CommandConfig cfg;
   cfg.enabled_ = read_bool(kf, group, "enabled", false);
-  cfg.host_ = read_string(kf, group, "host", "0.0.0.0");
-  cfg.port_ = read_uint16(kf, group, "port", 5002);
+  cfg.command_host_ = read_string(kf, group, "command_host", "0.0.0.0");
+  cfg.command_port_ = read_uint16(kf, group, "command_port", 5002);
   return cfg;
 }
 
@@ -170,8 +170,8 @@ SystemConfig load_config(const std::string &path) {
       break;
 
     found_numbered = true;
-    uint16_t fallback_pan = static_cast<uint16_t>(16 + (i - 1) * 2);
-    uint16_t fallback_tilt = static_cast<uint16_t>(17 + (i - 1) * 2);
+    uint16_t fallback_pan = static_cast<uint16_t>(16 + ((i - 1) * 2));
+    uint16_t fallback_tilt = static_cast<uint16_t>(17 + ((i - 1) * 2));
     sys.gimbals_.push_back(read_gimbal(kf, can_group, fallback_pan, fallback_tilt));
 
     if (g_key_file_has_group(kf, trk_group))

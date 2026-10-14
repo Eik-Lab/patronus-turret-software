@@ -78,10 +78,10 @@ bool configureSerialPort(int fd, speed_t speed) {
   return true;
 }
 
-double nmeaToDecimal(double value, char direction) {
+double nmea_to_decimal(double value, char direction) {
   double degrees = std::floor(value / 100.0);
-  double minutes = value - degrees * 100.0;
-  double result = degrees + minutes / 60.0;
+  double minutes = value - (degrees * 100.0);
+  double result = degrees + (minutes / 60.0);
 
   if (direction == 'S' || direction == 'W') {
     result = -result;
@@ -95,9 +95,9 @@ bool readSensorData(int fd, SensorData &data) {
 
   while (true) {
     char character = '\0';
-    ssize_t bytesRead = read(fd, &character, 1);
+    ssize_t bytes_read = read(fd, &character, 1);
 
-    if (bytesRead < 0) {
+    if (bytes_read < 0) {
       if (errno == EINTR) {
         continue;
       }
@@ -106,7 +106,7 @@ bool readSensorData(int fd, SensorData &data) {
       return false;
     }
 
-    if (bytesRead == 0) {
+    if (bytes_read == 0) {
       continue;
     }
 
@@ -120,14 +120,14 @@ bool readSensorData(int fd, SensorData &data) {
     }
 
     if (line.compare(0, 9, "Distance:") == 0) {
-      const char *valueStart = line.c_str() + 9;
-      char *valueEnd = nullptr;
+      const char *value_start = line.c_str() + 9;
+      char *value_end = nullptr;
 
       errno = 0;
 
-      float value = std::strtof(valueStart, &valueEnd);
+      float value = std::strtof(value_start, &value_end);
 
-      if (valueEnd != valueStart && errno != ERANGE) {
+      if (value_end != value_start && errno != ERANGE) {
         data.distance = value;
         data.has_distance = true;
         return true;
@@ -137,19 +137,19 @@ bool readSensorData(int fd, SensorData &data) {
     if (line.compare(0, 6, "$GNGLL") == 0 || line.compare(0, 6, "$GPGLL") == 0) {
       double latitude = 0.0;
       double longitude = 0.0;
-      char latitudeDirection = '\0';
-      char longitudeDirection = '\0';
-      char utcTime[32]{};
+      char latitude_direction = '\0';
+      char longitude_direction = '\0';
+      char utc_time[32]{};
       char status = '\0';
 
       int fields =
-        std::sscanf(line.c_str() + 7, "%lf,%c,%lf,%c,%31[^,],%c", &latitude, &latitudeDirection,
-                    &longitude, &longitudeDirection, utcTime, &status);
+        std::sscanf(line.c_str() + 7, "%lf,%c,%lf,%c,%31[^,],%c", &latitude, &latitude_direction,
+                    &longitude, &longitude_direction, utc_time, &status);
 
       if (fields == 6 && status == 'A') {
-        data.latitude = nmeaToDecimal(latitude, latitudeDirection);
+        data.latitude = nmea_to_decimal(latitude, latitude_direction);
 
-        data.longitude = nmeaToDecimal(longitude, longitudeDirection);
+        data.longitude = nmea_to_decimal(longitude, longitude_direction);
 
         data.has_gps = true;
         return true;

@@ -10,29 +10,35 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace patronus::comm {
 
 namespace {
 
-  // Exposure time change per inc_exp:<camera> / dec_exp:<camera> command, in microseconds.
-  constexpr double exposure_step_us = 50.0;
+  // Exposure range in microseconds, split into steps spaced evenly on a log scale so every
+  // inc_exp:<camera> / dec_exp:<camera> command changes brightness by the same ratio.
+  constexpr double exposure_min_us = 50.0;
+  constexpr double exposure_max_us = 20000.0;
+  constexpr int exposure_steps = 40;
+  const double exposure_step_factor =
+    std::pow(exposure_max_us / exposure_min_us, 1.0 / (exposure_steps - 1));
 
-  void adjust_exposure(const std::string &camera, double delta_us) {
+  void adjust_exposure(const std::string &camera, double factor) {
     if (camera == "1") {
-      patronus::pipeline::adjust_exposure_rgb(delta_us);
+      patronus::pipeline::adjust_exposure_rgb(factor, exposure_min_us, exposure_max_us);
     } else {
-      patronus::pipeline::adjust_exposure_mono(delta_us);
+      patronus::pipeline::adjust_exposure_mono(factor, exposure_min_us, exposure_max_us);
     }
   }
 
   void decrease_exposure(const std::string &camera) {
-    adjust_exposure(camera, -exposure_step_us);
+    adjust_exposure(camera, 1.0 / exposure_step_factor);
   }
 
   void increase_exposure(const std::string &camera) {
-    adjust_exposure(camera, exposure_step_us);
+    adjust_exposure(camera, exposure_step_factor);
   }
 
 } // namespace

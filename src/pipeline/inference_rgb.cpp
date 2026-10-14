@@ -23,6 +23,7 @@
 
 #include <stdio.h>
 
+#include <algorithm>
 #include <cstdlib>
 
 #define MAX_DISPLAY_LEN 64
@@ -302,14 +303,15 @@ void stop_pipeline_rgb() {
     g_main_loop_quit(g_loop_rgb);
 }
 
-void adjust_exposure_rgb(double delta_us) {
+void adjust_exposure_rgb(double factor, double min_us, double max_us) {
   if (!g_source_rgb)
     return;
   // pylonsrc maps the camera's pylon features to "cam::" child properties.
   GstChildProxy *camera = GST_CHILD_PROXY(g_source_rgb);
   gdouble exposure_us = 0.0;
   gst_child_proxy_get(camera, "cam::ExposureTime", &exposure_us, NULL);
-  gst_child_proxy_set(camera, "cam::ExposureTime", exposure_us + delta_us, NULL);
+  gst_child_proxy_set(camera, "cam::ExposureTime", std::clamp(exposure_us * factor, min_us, max_us),
+                      NULL);
 }
 
 } // namespace patronus::pipeline
