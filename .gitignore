@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 .vscode/
-tests/
 src/build/
 **/*.mp4
 **/*.h264

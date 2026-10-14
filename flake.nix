@@ -1,21 +1,15 @@
 {
-  description = "taken from: Kalman filter C++ ioe";
+  description = "Patronus turret software — dev shell";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-
-    treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
-
-    pre-commit-hooks-nix.url = "github:cachix/pre-commit-hooks.nix";
-    pre-commit-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, ... }@inputs:
+    inputs:
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
@@ -24,106 +18,97 @@
         "aarch64-darwin"
       ];
 
-      imports = [
-        inputs."treefmt-nix".flakeModule
-      ];
-
       perSystem =
         {
           config,
           pkgs,
-          system,
           ...
         }:
         let
-          # Build tools common to all phases
-          nativeBuildInputs = with pkgs; [
-            cmake
-            ninja
-            pkg-config
-          ];
+          # Only what the turret build cannot get from the host.
+          #
+          # DeepStream, CUDA, GStreamer, glib and libusb exist only as JetPack /
+          # Ubuntu packages under /usr and /opt/nvidia, and they are built against
+          # the host glibc and libstdc++. So the turret has to be compiled and
+          # linked by the *host* cmake and gcc. The nixpkgs cmake deliberately does
+          # not search /usr (CANdle-SDK then fails on "libusb library not found"),
+          # and a nixpkgs gcc links against its own glibc, which does not mix with
+          # the NVIDIA libraries.
+          #
+          # This shell therefore brings no cmake, compiler or pkg-config,
+          # and never sets CXXFLAGS. It supplies Eigen, which the host
+          # may lack and which is header-only, so there is no ABI to mismatch.
+          buildInputs = [ pkgs.eigen ];
 
-          # Runtime/library dependencies
-          buildInputs = with pkgs; [
-            eigen
-            gtest
-            gbenchmark
-            opencv
-          ];
-
-          # Development-only tools
+          # Development-only tools that do not take part in the build.
           devInputs =
             (with pkgs; [
-              clang-tools
               cmake-language-server
-              lldb
               bear
-              tracy
+              clang-tools
+              deadnix
+              pre-commit
+              typos
             ])
-            ++ pkgs.lib.optionals (!pkgs.stdenv.isDarwin) [
+            ++ pkgs.lib.optionals (!pkgs.stdenv.hostPlatform.isDarwin) [
               pkgs.gdb
               pkgs.valgrind
-              pkgs.linuxPackages.perf
-              pkgs.samply
             ];
-
-          kalman-cpp = pkgs.stdenv.mkDerivation {
-            pname = "kalman-cpp";
-            version = "0.1.0";
-
-            src = self;
-
-            inherit nativeBuildInputs;
-            inherit buildInputs;
-
-            cmakeFlags = [
-              "-DCMAKE_BUILD_TYPE=Release"
-              "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-            ];
-
-            CXXFLAGS = [ "-std=c++17" ];
-          };
         in
         {
-          packages.default = kalman-cpp;
-
-          checks = {
-            pre-commit = inputs."pre-commit-hooks-nix".lib.${system}.run {
-              src = self;
-              hooks = {
-                clang-format.enable = true;
-                clang-tidy.enable = true;
-                cmake-format.enable = true;
-                nixfmt.enable = true;
-                deadnix.enable = true;
-                typos.enable = true;
+          formatter = pkgs.treefmt.withConfig {
+            settings = {
+              tree-root-file = "flake.nix";
+              excludes = [ "deps/**" ];
+              formatter = {
+                nixfmt = {
+                  command = "nixfmt";
+                  includes = [ "*.nix" ];
+                };
+                clang-format = {
+                  command = "clang-format";
+                  options = [ "-i" ];
+                  includes = [
+                    "*.c"
+                    "*.cc"
+                    "*.cpp"
+                    "*.h"
+                    "*.hh"
+                    "*.hpp"
+                    "*.cu"
+                    "*.cuh"
+                  ];
+                };
+                cmake-format = {
+                  command = "cmake-format";
+                  options = [ "-i" ];
+                  includes = [
+                    "*.cmake"
+                    "CMakeLists.txt"
+                  ];
+                };
               };
             };
+            runtimeInputs = [
+              pkgs.nixfmt
+              pkgs.clang-tools
+              pkgs.cmake-format
+            ];
           };
 
-          treefmt = {
-            projectRootFile = "flake.nix";
-            programs = {
-              nixfmt.enable = true;
-              clang-format.enable = true;
-              cmake-format.enable = true;
-            };
-          };
-
-          devShells.default = pkgs.mkShell {
-            inherit nativeBuildInputs;
-            buildInputs = buildInputs ++ devInputs;
+          devShells.default = pkgs.mkShellNoCC {
+            packages = buildInputs ++ devInputs ++ [ config.formatter ];
 
             shellHook = ''
-              ${config.checks.pre-commit.shellHook}
+              # Pre-commit rejects even an explicit default hook path; preserve custom paths.
+              if [ "$(git config --local --get core.hooksPath)" = ".git/hooks" ]; then
+                git config --local --unset core.hooksPath
+              fi
+              pre-commit install
               export CMAKE_EXPORT_COMPILE_COMMANDS=ON
-              # Resolve find_package(Tracy) to the pinned nixpkgs tracy.
-              export CMAKE_PREFIX_PATH="${pkgs.tracy}:''${CMAKE_PREFIX_PATH:-}"
+              # Let the host cmake resolve find_package(Eigen3) to the pinned eigen.
+              export CMAKE_PREFIX_PATH="${pkgs.eigen}''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
             '';
-
-            CXXFLAGS = "-std=c++17 -Wall -Wextra -Wpedantic -Werror";
-
-            hardeningDisable = [ "fortify" ];
           };
         };
     };
