@@ -19,52 +19,17 @@ struct PipelineConfig {
   bool enabled_{true};             ///< Whether this pipeline is active.
 
   /// Pixel space in which the detector reports bounding boxes.
-  ///
-  /// This is NOT necessarily the muxed stream size and NOT the network input
-  /// size. The network runs at 640x640, and DeepStream-Yolo's
-  /// `NvDsInferParseYolo` emits boxes in whichever space the parser was
-  /// written against; nothing in the pad probe rescales them. Getting this
-  /// wrong is not a rounding error -- a detector emitting 640x640 while the
-  /// code assumes 1920x1088 produces a standing ~-640 px error and sends the
-  /// gimbal hard over.
-  ///
-  /// Verify against the detector's own output: read a box's pixel extent off the
-  /// stream and compare. If boxes max out near 640 while this says 1920, these
-  /// are wrong.
   uint32_t detection_width_{1920};  ///< Detection-space width in pixels.
   uint32_t detection_height_{1088}; ///< Detection-space height in pixels.
 
   /// Focal length in pixels, in *muxed* coordinates.
-  ///
-  /// Detections are produced from the 1920x1088 muxed stream, not from the
-  /// native sensor resolution, so the intrinsics that matter are the post-mux
-  /// ones. They are needed to convert between angular and pixel rates: a
-  /// gimbal slewing at omega rad/s moves a target across the frame at
-  /// fx*omega pixels/s, and the target filter removes that self-induced
-  /// apparent motion before estimating the target's own velocity.
-  ///
-  /// Derive from the lens and sensor geometry, or measure directly with the
-  /// `calibrate_focal` tool, which slews the gimbal through known angles and
-  /// solves fx = delta_px / delta_rad. Leaving these at zero disables
-  /// ego-motion compensation (degraded but safe: the filter then treats
-  /// gimbal motion as target manoeuvre).
   float focal_x_px_{0.0f}; ///< Horizontal focal length, pixels.
   float focal_y_px_{0.0f}; ///< Vertical focal length, pixels.
 
   /// Draw the target filter's prediction on the video overlay.
-  ///
-  /// The overlay is drawn by the video thread from predictions published by the
-  /// tracking threads, so it keeps working (and coasting) while detections are
-  /// rejected or absent — which is exactly when it is worth watching. Purely
-  /// cosmetic: turning it off does not change what the motors are commanded.
   bool draw_predictions_{true};
 
   /// Look-ahead horizon for the drawn velocity arrow, seconds.
-  ///
-  /// This is a *visualisation* horizon, chosen to be visible at the frame rates
-  /// involved. It is deliberately independent of the per-gimbal `lead_gain`,
-  /// which is a control-law parameter: tuning one must not silently redraw the
-  /// other.
   float prediction_lead_s_{0.15f};
 };
 
@@ -105,16 +70,6 @@ struct TrackingConfig {
   int filter_max_coast_ms_{1000};
 
   /// Age of a detection at the moment it reaches the tracking loop, in ms.
-  ///
-  /// The ego-motion correction has to apply the gimbal angle from when the
-  /// frame was *captured*, not from when we processed it. Most of that delay
-  /// the filter can recover on its own by looking up a timestamped angle
-  /// history, but the sensor-side portion (exposure, ISP, TensorRT inference)
-  /// is not observable from the tracking thread, so it is declared here.
-  ///
-  /// Leaving this at 0 biases the correction in proportion to slew rate: at
-  /// 6.28 rad/s and f = 1000 px, an uncorrected 20 ms is ~125 px of error.
-  /// Measure it once with a fixed target and correct it.
   int filter_pipeline_latency_ms_{20};
 
   // --- Control law -------------------------------------------------------
