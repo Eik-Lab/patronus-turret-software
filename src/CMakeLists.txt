@@ -23,9 +23,6 @@ set(SRC_INC2 ${SRC_PATH}/sources/includes)
 
 # clang-tidy integration Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
 find_program(CLANG_TIDY NAMES clang-tidy)
-# Empty as well as "OFF": the top level normalises `-DCMAKE_CXX_CLANG_TIDY=OFF`
-# to the empty string before we get here, and re-enabling it would ignore the
-# flag.
 if(CLANG_TIDY
    AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF"
    AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "")

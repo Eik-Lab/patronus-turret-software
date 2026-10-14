@@ -25,19 +25,6 @@
           ...
         }:
         let
-          # Only what the turret build cannot get from the host.
-          #
-          # DeepStream, CUDA, GStreamer, glib and libusb exist only as JetPack /
-          # Ubuntu packages under /usr and /opt/nvidia, and they are built against
-          # the host glibc and libstdc++. So the turret has to be compiled and
-          # linked by the *host* cmake and gcc. The nixpkgs cmake deliberately does
-          # not search /usr (CANdle-SDK then fails on "libusb library not found"),
-          # and a nixpkgs gcc links against its own glibc, which does not mix with
-          # the NVIDIA libraries.
-          #
-          # This shell therefore brings no cmake, compiler or pkg-config,
-          # and never sets CXXFLAGS. It supplies Eigen, which the host
-          # may lack and which is header-only, so there is no ABI to mismatch.
           buildInputs = [ pkgs.eigen ];
 
           # Development-only tools that do not take part in the build.

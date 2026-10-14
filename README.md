@@ -2,11 +2,11 @@
 
 **Eik Lab, Norwegian University of Life Sciences (NMBU)**
 
-![Turret System](images/turret.png)
+![Turret System](assets/images/turret.png)
 
 
 ### Dual-Camera System
-![Sensor Module](images/sensor_module.png)
+![Sensor Module](assets/images/sensor_module.png)
 The sensor module uses two Basler ace 2 cameras with complementary capabilities:
 
 | Camera | Purpose | Specs |
@@ -23,7 +23,7 @@ This software powers an autonomous anti-drone defense turret designed to detect,
 
 ## How It Works
 
-![System Architecture](images/architecture.png)
+![System Architecture](assets/images/architecture.png)
 
 The system combines computer vision, real-time tracking, and precision motor control:
 
