@@ -1,5 +1,8 @@
 #include "patronus/comm/command_listener.hpp"
 
+#include "patronus/pipeline/inference_mono.hpp"
+#include "patronus/pipeline/inference_rgb.hpp"
+
 #include <glib.h>
 
 #include <arpa/inet.h>
@@ -7,12 +10,45 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace patronus::comm {
 
+namespace {
+
+  // Exposure range in microseconds, split into steps spaced evenly on a log scale so every
+  // inc_exp:<camera> / dec_exp:<camera> command changes brightness by the same ratio.
+  constexpr double exposure_min_us = 50.0;
+  constexpr double exposure_max_us = 20000.0;
+  constexpr int exposure_steps = 40;
+  const double exposure_step_factor =
+    std::pow(exposure_max_us / exposure_min_us, 1.0 / (exposure_steps - 1));
+
+  void adjust_exposure(const std::string &camera, double factor) {
+    if (camera == "1") {
+      patronus::pipeline::adjust_exposure_rgb(factor, exposure_min_us, exposure_max_us);
+    } else {
+      patronus::pipeline::adjust_exposure_mono(factor, exposure_min_us, exposure_max_us);
+    }
+  }
+
+  void decrease_exposure(const std::string &camera) {
+    adjust_exposure(camera, 1.0 / exposure_step_factor);
+  }
+
+  void increase_exposure(const std::string &camera) {
+    adjust_exposure(camera, exposure_step_factor);
+  }
+
+} // namespace
+
 void handleShoot() {
-  g_print("SHOOT\n");
+  // send command to arduino, needs to initilize serial port.
+  /*   "safety-on": skru på safety
+  "safety-off": skru av safety
+  "fire": begynn å skyt
+  "hold": stopp å skyt */
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -47,10 +83,18 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
     buffer[n] = '\0';
     std::string command(buffer);
 
+    // Commands may carry an argument after a colon, e.g. "inc_exp:1".
+    const std::string::size_type colon = command.find(':');
+    const std::string name = command.substr(0, colon);
+    const std::string argument = (colon == std::string::npos) ? "" : command.substr(colon + 1);
+
     if (command == "shoot") {
       handleShoot();
+    } else if (name == "inc_exp") {
+      increase_exposure(argument);
+    } else if (name == "dec_exp") {
+      decrease_exposure(argument);
     } else {
-      g_print(":CommandListener: Received command: %s\n", command.c_str());
     }
   }
 

@@ -21,4 +21,12 @@ int run_pipeline_rgb(const patronus::config::PipelineConfig &config,
 ///        Safe to call from a signal handler (only touches a file-scope pointer).
 void stop_pipeline_rgb();
 
+/// @brief Change the rgb camera's exposure time by a relative amount.
+/// @param factor Multiplier for the current exposure time; values below 1 shorten the exposure.
+/// @param min_us Lower limit for the new exposure time, in microseconds.
+/// @param max_us Upper limit for the new exposure time, in microseconds.
+/// @note Does nothing if the rgb pipeline is not running. Has no lasting effect while the
+///       camera's ExposureAuto is enabled.
+void adjust_exposure_rgb(double factor, double min_us, double max_us);
+
 } // namespace patronus::pipeline
