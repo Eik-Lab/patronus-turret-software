@@ -203,9 +203,10 @@ private:
 /// the world holds still in the filter. Positions are converted back to image
 /// space on output.
 ///
-/// This needs `focal_x_px_`/`focal_y_px_` (see `--calibrate-focal`) and a motor
-/// to read encoders from. Without either, the filter tracks in image space and
-/// `Estimate::camera_compensated()` reports false.
+/// This needs `focal_x_px_`/`focal_y_px_` (computed from the lens and
+/// sensor specs) and a motor to read encoders from. Without either, the
+/// filter tracks in image space and `Estimate::camera_compensated()`
+/// reports false.
 ///
 /// ## Track loss
 ///

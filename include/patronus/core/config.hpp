@@ -28,9 +28,9 @@ struct PipelineConfig {
   /// code assumes 1920x1088 produces a standing ~-640 px error and sends the
   /// gimbal hard over.
   ///
-  /// Verify with `--calibrate-focal`, which measures the effective focal length
-  /// and compares it against the value this width implies. If the measured fx
-  /// is off by roughly the width ratio (1920/640 = 3), these are wrong.
+  /// Verify against the detector's own output: read a box's pixel extent off the
+  /// stream and compare. If boxes max out near 640 while this says 1920, these
+  /// are wrong.
   uint32_t detection_width_{1920};  ///< Detection-space width in pixels.
   uint32_t detection_height_{1088}; ///< Detection-space height in pixels.
 

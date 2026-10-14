@@ -4,8 +4,6 @@
 #include "patronus/core/state.hpp"
 #include "patronus/pipeline/inference_mono.hpp"
 #include "patronus/pipeline/inference_rgb.hpp"
-#include "patronus/tools/calibrate_focal.hpp"
-#include "patronus/tools/motor_test.hpp"
 #include "patronus/tracking/aim_control.hpp"
 #include "patronus/tracking/prediction_overlay.hpp"
 #include "patronus/tracking/target_filter.hpp"
@@ -49,28 +47,18 @@ int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
   gboolean rgb_only = FALSE;
   gboolean mono_only = FALSE;
-  gboolean test_motors = FALSE;
-  gboolean calibrate_focal = FALSE;
 
   GOptionEntry entries[] = {
     {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config_path,
      "Path to system config file (default: config/system.ini)", "FILE"},
     {"rgb-only", 'r', 0, G_OPTION_ARG_NONE, &rgb_only, "Run RGB pipeline only", nullptr},
     {"mono-only", 'm', 0, G_OPTION_ARG_NONE, &mono_only, "Run mono pipeline only", nullptr},
-    {"test-motors", 't', 0, G_OPTION_ARG_NONE, &test_motors,
-     "Spin each motor briefly to verify CAN bus, then exit", nullptr},
-    {"calibrate-focal", 0, 0, G_OPTION_ARG_NONE, &calibrate_focal,
-     "Slew each gimbal through known angles to measure the camera focal length, then exit",
-     nullptr},
     {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr},
   };
 
   GOptionContext *ctx = g_option_context_new("- patronus inference system");
   g_option_context_add_main_entries(ctx, entries, nullptr);
-
-  // Only add GStreamer group if not testing motors (avoid needing cameras)
-  if (!test_motors)
-    g_option_context_add_group(ctx, gst_init_get_option_group());
+  g_option_context_add_group(ctx, gst_init_get_option_group());
 
   GError *error = nullptr;
   if (!g_option_context_parse(ctx, &argc, &argv, &error)) {
@@ -87,10 +75,6 @@ int main(int argc, char *argv[]) {
 
   std::signal(SIGTERM, signal_handler);
   std::signal(SIGINT, signal_handler);
-
-  // ── --test-motors: standalone CAN bus test, no cameras needed ──────────────
-  if (test_motors)
-    return patronus::tools::run_motor_test(cfg, running);
 
   // ── Normal inference + tracking mode ───────────────────────────────────────
 
@@ -135,11 +119,7 @@ int main(int argc, char *argv[]) {
   // only when it has a motor handle.
   std::vector<std::thread> tracking_threads;
   std::shared_ptr<patronus::comm::CandleMotor> motor;
-  // Focal calibration also needs the motor, but the two must not run at once:
-  // the calibration drives each gimbal to a sequence of known angles, and a
-  // tracking thread on the same gimbal would be commanding velocities
-  // underneath it, making the regression meaningless and the motion unsafe.
-  if (cfg.tracking_ || calibrate_focal) {
+  if (cfg.tracking_) {
     motor = std::make_shared<patronus::comm::CandleMotor>(cfg.gimbals_, cfg.can_bus_);
     if (!motor->init()) {
       g_critical("Failed to initialise CANdle motor driver — tracking disabled");
@@ -149,9 +129,8 @@ int main(int argc, char *argv[]) {
 
   // The filter does not depend on the motors: with `tracking=false`, or a CAN bus
   // that failed to come up, the threads still run so the overlay shows the
-  // prediction, and simply never command a velocity. Not during focal
-  // calibration, which owns both the gimbals and the detection queues.
-  if (!calibrate_focal && (rgb_active || mono_active)) {
+  // prediction, and simply never command a velocity.
+  if (rgb_active || mono_active) {
     // Only hand the threads a motor when tracking was asked for.
     const std::shared_ptr<patronus::comm::CandleMotor> drive_motor =
       cfg.tracking_ ? motor : nullptr;
@@ -195,7 +174,8 @@ int main(int argc, char *argv[]) {
         if (driving && trk.filter_enabled_ && !filter.ego_compensation_active()) {
           g_warning("Tracking gimbal %zu: no focal length set (focal_x_px/focal_y_px). "
                     "Camera motion is not compensated, so the filter will read the "
-                    "gimbal's own slew as target motion. Run --calibrate-focal.",
+                    "gimbal's own slew as target motion. Set these from the camera's "
+                    "lens and sensor specs.",
                     g);
         }
 
@@ -349,32 +329,6 @@ int main(int argc, char *argv[]) {
           motor->set_velocity(g, 0.0F, 0.0F);
         predictions->clear(g);
       });
-    }
-  }
-
-  // ── --calibrate-focal: measure fx/fy from known gimbal angles ─────────────
-  // Runs alongside the live pipelines, because the only source of detections is
-  // the perception stack. A separate calibration binary would have to open the
-  // cameras a second time, which the Basler sources will not allow.
-  if (calibrate_focal) {
-    g_print("\nFocal calibration — pointing the camera at a high-contrast target is required.\n");
-    if (!motor) {
-      g_critical("Focal calibration needs the motor driver, which failed to initialise");
-      running = false;
-    } else {
-      for (size_t g = 0; g < motor->gimbal_count() && running; ++g) {
-        const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
-        const auto &pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
-        auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
-                                                : (use_rgb ? &detection_rgb : &detection_mono);
-        const int rc = patronus::tools::run_focal_calibration(
-          *motor, g, cfg.gimbals_[g], *det, pipe.detection_width_, pipe.detection_height_,
-          pipe.focal_x_px_, pipe.focal_y_px_, running);
-        if (rc != 0) {
-          g_printerr("Gimbal %zu: focal calibration failed\n", g);
-        }
-      }
-      running = false; // always stop the pipelines and exit afterwards
     }
   }
 

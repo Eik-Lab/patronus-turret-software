@@ -171,23 +171,6 @@ std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
   return {pp.first, tp.first};
 }
 
-bool CandleMotor::calibrate_home(size_t gimbal) {
-  if (gimbal >= gimbals_.size())
-    return false;
-  auto *pan = pan_motors_[gimbal].get();
-  auto *tilt = tilt_motors_[gimbal].get();
-  if (pan == nullptr || tilt == nullptr)
-    return false;
-
-  const std::lock_guard<std::mutex> lock(bus_mutex_);
-  bool ok = true;
-  for (auto *md : {pan, tilt}) {
-    ok &= (md->zero() == mab::MD::Error_t::OK);
-    ok &= (md->save() == mab::MD::Error_t::OK);
-  }
-  return ok;
-}
-
 bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                                  float max_velocity_rad_s) {
   if (gimbal >= gimbals_.size())

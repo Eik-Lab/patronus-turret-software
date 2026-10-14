@@ -17,10 +17,6 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Must be in the top-level scope for `ctest` to find tests registered in a
-# subdirectory.
-enable_testing()
-
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # NVIDIA Jetson AGX Thor (Blackwell, sm_11.0) Use 'native' for auto-detection,
@@ -56,8 +52,7 @@ FetchContent_Declare(
   candlesdk
   GIT_REPOSITORY https://codeberg.org/fatum/CANdle-SDK-CPP17.git
   GIT_TAG 60c4e2c973de5632d81783271d54941a0202b91b
-  GIT_SUBMODULES commons/googletest
-  EXCLUDE_FROM_ALL)
+  GIT_SUBMODULES commons/googletest EXCLUDE_FROM_ALL)
 
 set(CANDLESDK_BUILD_EXAMPLES
     OFF

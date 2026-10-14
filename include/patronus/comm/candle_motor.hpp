@@ -62,10 +62,6 @@ public:
   /// @return Pair of (pan_rad, tilt_rad).
   std::pair<float, float> get_position(size_t gimbal);
 
-  /// @brief Zero the encoder at the current position for a specific gimbal.
-  /// @return true on success.
-  [[nodiscard]] bool calibrate_home(size_t gimbal);
-
   /// @brief Drive a specific gimbal toward home using velocity-mode P-control.
   /// @param position_gain      P-gain (rad/s per rad of position error).
   /// @param tolerance_rad      Position deadband for "at home".

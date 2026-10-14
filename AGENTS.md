@@ -32,7 +32,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build -j$(nproc)
 
 # Lint (if not running via CMake)
-clang-tidy src/**/*.cpp --extra-arg=-std=c++17 -Iinclude
+clang-tidy src/**/*.cpp --extra-arg=-std=c++17 -I ./include
 
 # Format (in-place)
 clang-format -i src/**/*.cpp include/**/*.hpp
@@ -272,30 +272,16 @@ The **tracking loop** (one per gimbal) and **motor commands** are the hot path:
 
 ## Testing
 
-### Unit Tests
+There is no test suite in this repository. The turret is verified by running it:
+see [Runtime & Deployment](#runtime--deployment) for the launch commands, and
+[Monitoring](#monitoring) for `tegrastats` and `candump`.
 
-- Framework: Google Test (if added) or Catch2
-- Location: `tests/` directory
-- Run: `./build/tests` after build
-
-### Integration Tests
-
-- Motor tests: `./build/calibrate_home --test-motors`
-- Pipeline tests: `./build/inference --rgb-only` or `--mono-only`
-
-### What to Test
-
-1. **Tracking math** — `compute_control_weapon()` output for known inputs
-2. **Config loading** — INI file parsing with missing/invalid values
-3. **Motor commands** — velocity clamping, home return, timeout behavior
-4. **Edge cases** — empty detection queues, zero gimbals, division by zero in transforms
-
-### Test Conventions
-
-- Test files: `*_test.cpp` or `test_*.cpp`
-- One test per behavior
-- Name tests descriptively: `TEST(Tracking, ZeroErrorProducesZeroVelocity)`
-- No `ASSERT_EQ` in loops — use `EXPECT_EQ` for non-fatal checks
+**`focal_x_px`/`focal_y_px` are unset in `config/system.ini`, so ego-motion
+compensation is off.** Set them from the lens and sensor specs before enabling the
+`kd` or `lead_gain` terms, both of which currently ship at `0.0` and so have no
+effect on the motor command until they are tuned. The same applies to
+`detection_width`/`detection_height`, whose current values are unverified against
+where the YOLOv8 detector actually reports boxes.
 
 ---
 
@@ -394,9 +380,6 @@ std::signal(SIGINT, signal_handler);
 
 # Mono pipeline only (1 camera)
 ./build/inference -c config/system.ini --mono-only
-
-# Motor test (no cameras needed)
-./build/inference -c config/system.ini --test-motors
 ```
 
 ### Prerequisites
@@ -423,9 +406,6 @@ tegrastats
 
 # CAN bus traffic (if can-utils installed)
 candump can0
-
-# Motor status (via calibrate_home tool)
-./build/calibrate_home
 ```
 
 ---
@@ -439,4 +419,4 @@ candump can0
 5. `include/patronus/pipeline/inference_rgb.hpp` — RGB pipeline API
 6. `include/patronus/tracking/aim_control.hpp` — control math
 7. `include/patronus/comm/candle_motor.hpp` — CAN bus motor driver
-8. `src/tools/calibrate_home.cpp` — home calibration tool
+8. `include/patronus/tracking/target_filter.hpp` — Kalman target filter
