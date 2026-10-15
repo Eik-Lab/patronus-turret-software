@@ -1,0 +1,23 @@
+dataset:
+  root: ./data/drone_yolo
+  data_yaml: ./data/drone_yolo/data.yaml
+
+model:
+  type: yolo
+  name: yolov8s.pt
+  architecture: architectures/yolov8s-p2.yaml
+
+training:
+  output_dir: ./runs/yolov8_p2
+  epochs: 100
+  batch_size: 16
+  learning_rate: 1.0e-3
+  lr_final_ratio: 0.01
+  weight_decay: 5.0e-4
+  momentum: 0.937
+  warmup_epochs: 3.0
+  optimizer: auto
+  cos_lr: false
+  image_size: 640
+  num_workers: 8
+  seed: 42

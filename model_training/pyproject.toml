@@ -1,0 +1,23 @@
+[project]
+name = "model-training"
+version = "0.1.0"
+description = "Patronus object-detection training (COCO/YOLO datasets, HuggingFace + Ultralytics)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml",
+    "matplotlib",
+    "numpy",
+    "albumentations",
+    "torch",
+    "torchvision",
+    "transformers>=5.0",
+    "tensorboard",
+    "pycocotools",
+    "roboflow",
+    "python-dotenv",
+    "ultralytics",
+    "onnx",
+    "onnxslim",
+    "onnxruntime",
+]

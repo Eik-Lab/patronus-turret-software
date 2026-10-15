@@ -1,0 +1,20 @@
+# EikLab brand palette (eiklab.no).
+
+KREM = "#f7f4ef"
+EIK_5 = "#d4eeea"
+EIK_20 = "#80ccc0"
+EIK_30 = "#55bcab"
+EIK_40 = "#2aab96"
+EIK_50 = "#009a81"
+EIK_60 = "#037a67"
+EIK_70 = "#065a4c"
+EIK_80 = "#004a3e"
+STORM_10 = "#ced2d1"
+STORM_40 = "#868e8b"
+STORM_50 = "#6e7774"
+STORM_60 = "#55615d"
+STORM_70 = "#3d4a46"
+
+PRIMARY = EIK_80
+HIGHLIGHT = EIK_40
+SEQUENCE = [EIK_80, EIK_50, EIK_30, STORM_50, EIK_20, STORM_40]

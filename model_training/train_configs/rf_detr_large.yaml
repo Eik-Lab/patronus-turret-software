@@ -1,0 +1,29 @@
+dataset:
+  root: ./data/drone
+  train_images: train
+  train_annotations: train/_annotations.coco.json
+  val_images: valid
+  val_annotations: valid/_annotations.coco.json
+
+model:
+  type: rfdetr
+  name: Roboflow/rf-detr-large
+
+training:
+  output_dir: ./runs/rf_detr_large
+  tensorboard_dir: ./runs/rf_detr_large/tb
+  epochs: 50
+  batch_size: 2
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_ratio: 0.0
+  lr_scheduler_type: linear
+  max_grad_norm: 1.0
+  optimizer: adamw_torch
+  image_size: 1008
+  num_workers: 4
+  logging_steps: 10
+  save_total_limit: 3
+  seed: 42
+  augment: true
