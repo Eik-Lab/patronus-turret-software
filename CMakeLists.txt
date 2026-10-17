@@ -64,6 +64,12 @@ if(NOT Eigen3_FOUND AND NOT TARGET Eigen3::Eigen)
       "  -DEigen3_DIR=/path/to/eigen/share/eigen3/cmake")
 endif()
 
+set(DS_VERSION 8.0)
+set(DEEPSTREAM_PATH "/opt/nvidia/deepstream/deepstream-${DS_VERSION}")
+if(NOT EXISTS "${DEEPSTREAM_PATH}")
+  message(FATAL_ERROR "DeepStream ${DS_VERSION} not found at ${DEEPSTREAM_PATH}")
+endif()
+
 # EXCLUDE_FROM_ALL on both: only what our targets link against gets built.
 FetchContent_MakeAvailable(candlesdk kalman_cpp)
 

@@ -5,7 +5,6 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 string(REGEX MATCH "^[^-]+" LINUX_ARCH ${LINUX_ARCH_FULL})
-set(DS_VERSION 8.0)
 set(CUDA_VER 13.0)
 
 message("-- DeepStream Version: ${DS_VERSION}")
@@ -63,7 +62,7 @@ target_include_directories(
           /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)
 
 target_link_directories(
-  inference PRIVATE ${SRC_PATH}/lib /usr/local/cuda-${CUDA_VER}/lib64
+  inference PRIVATE ${DEEPSTREAM_PATH}/lib /usr/local/cuda-${CUDA_VER}/lib64
   /usr/lib/${LINUX_ARCH}-linux-gnu
   /usr/lib/${LINUX_ARCH}-linux-gnu/gstreamer-1.0)
 
