@@ -65,10 +65,22 @@ if(NOT Eigen3_FOUND AND NOT TARGET Eigen3::Eigen)
 endif()
 
 set(DS_VERSION 8.0)
-set(DEEPSTREAM_PATH "/opt/nvidia/deepstream/deepstream-${DS_VERSION}")
-if(NOT EXISTS "${DEEPSTREAM_PATH}")
-  message(FATAL_ERROR "DeepStream ${DS_VERSION} not found at ${DEEPSTREAM_PATH}")
+set(DS_PATH "/opt/nvidia/deepstream/deepstream-${DS_VERSION}")
+if(NOT EXISTS "${DS_PATH}")
+  message(FATAL_ERROR "DeepStream ${DS_VERSION} not found at ${DS_PATH}")
 endif()
+
+function(check_ds_lib libname)
+  set(libpath "${DS_PATH}/lib/lib${libname}.so")
+  if(NOT EXISTS ${libpath})
+    message(FATAL_ERROR "Missing lib${libname}.so at ${libpath}\n"
+            "Please make sure DeepStream is properly installed")
+  endif()
+endfunction()
+
+foreach(nvds_lib nvdsgst_meta nvds_meta nvds_yml_parser nvdsgst_helper nvbufsurface)
+  check_ds_lib(${nvds_lib})
+endforeach()
 
 # EXCLUDE_FROM_ALL on both: only what our targets link against gets built.
 FetchContent_MakeAvailable(candlesdk kalman_cpp)
