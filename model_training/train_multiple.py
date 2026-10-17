@@ -8,8 +8,8 @@ from train import run
 
 DEFAULT_CONFIGS = [
     "train_configs/rf_detr_large.yaml",
+    "train_configs/rf_detr.yaml",
     "train_configs/dfine_medium.yaml",
-    "train_configs/yolov8_p2.yaml",
 ]
 
 

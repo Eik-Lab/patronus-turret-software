@@ -1,9 +1,9 @@
 dataset:
-  root: ./data/drone
+  root: /home/frederic/Documents/patronus-turret-software/model_training/repository_location/option_A_half_total
   train_images: train
-  train_annotations: train/_annotations.coco.json
-  val_images: valid
-  val_annotations: valid/_annotations.coco.json
+  train_annotations: train/annotations.json
+  val_images: val
+  val_annotations: val/annotations.json
 
 model:
   type: rfdetr
