@@ -1,0 +1,16 @@
+tree-root-file = "flake.nix"
+excludes = ["deps/**", "build/**", ".amp/**"]
+
+[formatter.nixfmt]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.clang-format]
+command = "clang-format"
+options = ["-i"]
+includes = ["*.c", "*.cc", "*.cpp", "*.h", "*.hh", "*.hpp", "*.cu", "*.cuh"]
+
+[formatter.cmake-format]
+command = "cmake-format"
+options = ["-i"]
+includes = ["*.cmake", "CMakeLists.txt"]

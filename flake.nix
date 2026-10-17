@@ -18,38 +18,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           formatter = pkgs.treefmt.withConfig {
-            settings = {
-              tree-root-file = "flake.nix";
-              excludes = [ "deps/**" ];
-              formatter = {
-                nixfmt = {
-                  command = "nixfmt";
-                  includes = [ "*.nix" ];
-                };
-                clang-format = {
-                  command = "clang-format";
-                  options = [ "-i" ];
-                  includes = [
-                    "*.c"
-                    "*.cc"
-                    "*.cpp"
-                    "*.h"
-                    "*.hh"
-                    "*.hpp"
-                    "*.cu"
-                    "*.cuh"
-                  ];
-                };
-                cmake-format = {
-                  command = "cmake-format";
-                  options = [ "-i" ];
-                  includes = [
-                    "*.cmake"
-                    "CMakeLists.txt"
-                  ];
-                };
-              };
-            };
+            settings = builtins.fromTOML (builtins.readFile ./treefmt.toml);
             runtimeInputs = [
               pkgs.nixfmt
               pkgs.clang-tools
