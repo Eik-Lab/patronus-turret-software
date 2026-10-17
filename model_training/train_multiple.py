@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 from pathlib import Path
 
 from stats import load_config
@@ -29,26 +30,38 @@ def main():
     )
     cli_args = parser.parse_args()
 
-    # Each config becomes an experiment named after its file (e.g. dfine_large),
-    # with its outputs grouped under <runs-dir>/<name> so runs never collide.
+    # Each config becomes an experiment named after its file (e.g. dfine_large).
+    # Artifacts (checkpoints, stats, samples) go under <runs-dir>/<name>, while
+    # every experiment logs TensorBoard into the shared <runs-dir>/tensorboard/
+    # root under its own name, so one `tensorboard --logdir` overlays them all.
+    runs_dir = Path(cli_args.runs_dir)
+    tb_root = runs_dir / "tensorboard"
     results = {}
     for config_path in cli_args.configs:
         name = Path(config_path).stem
         config = load_config(config_path)
-        config["training"]["output_dir"] = str(Path(cli_args.runs_dir) / name)
-        config["training"]["tensorboard_dir"] = str(Path(cli_args.runs_dir) / name / "tb")
+        config["training"]["output_dir"] = str(runs_dir / name)
+        config["training"]["tensorboard_dir"] = str(tb_root / name)
 
         print(f"\n########## experiment: {name} ##########")
         try:
-            run(config)
-            results[name] = "ok"
+            metrics = run(config)
+            results[name] = {"status": "ok", "metrics": metrics}
         except Exception as exc:
-            results[name] = f"failed: {exc}"
+            results[name] = {"status": f"failed: {exc}", "metrics": {}}
             print(f"  experiment {name} failed: {exc}")
 
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    with open(runs_dir / "results.json", "w") as f:
+        json.dump(results, f, indent=2)
+
     print("\n=== summary ===")
-    for name, status in results.items():
-        print(f"  {name}: {status}")
+    for name, result in results.items():
+        map_score = result["metrics"].get("map")
+        suffix = f" (mAP {map_score:.4f})" if map_score is not None else ""
+        print(f"  {name}: {result['status']}{suffix}")
+    print(f"\ncompare all experiments: tensorboard --logdir {tb_root}")
+    print(f"metrics summary: {runs_dir / 'results.json'}")
 
 
 if __name__ == "__main__":

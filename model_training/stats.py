@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
+"""
+Patronus — COCO dataset stats orchestrator.
+
+Runs every stat registered in data/ALL_STATS over the splits named in a
+training config. Run standalone to inspect a dataset before training:
+
+  python stats.py --config train_configs/dfine.yaml
+"""
+
 import argparse
 import json
 import os
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import yaml
 
 from dataset import ALL_STATS
@@ -45,6 +50,10 @@ def run_stats(annotations_path, split_name):
 
 def save_plots(combined, output_dir, split_name):
     """Render every stat's plot into <output_dir>/stats/<split>_<stat>.png."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     stats_dir = os.path.join(output_dir, "stats")
     os.makedirs(stats_dir, exist_ok=True)
 

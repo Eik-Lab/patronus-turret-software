@@ -27,3 +27,6 @@ training:
   save_total_limit: 3
   seed: 42
   augment: true
+  gradient_checkpointing: true
+  early_stopping_patience: 10
+  deterministic: false

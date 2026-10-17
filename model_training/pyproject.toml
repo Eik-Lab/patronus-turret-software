@@ -12,6 +12,7 @@ dependencies = [
     "torch",
     "torchvision",
     "transformers>=5.0",
+    "torchmetrics",
     "tensorboard",
     "pycocotools",
     "roboflow",
