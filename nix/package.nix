@@ -4,6 +4,8 @@
 pkgs.mkShellNoCC {
   __noChroot = true;
 
+  buildInputs = [ pkgs.libusb1 ];
+
   packages =
     (with pkgs; [
       cmake

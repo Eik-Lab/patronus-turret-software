@@ -42,4 +42,37 @@ The system combines computer vision, real-time tracking, and precision motor con
 | **Motor Control** | CAN bus via CANdle-SDK |
 | **Cameras** | Basler (Pylon SDK) |
 
+## Building
 
+CMake is the standard build workflow. Install a C/C++17 compiler, CMake 3.28 or
+newer, Make, Git, pkg-config, and the libusb 1.0 development files. On Ubuntu/Jetson:
+
+```sh
+sudo apt install build-essential cmake git pkg-config libusb-1.0-0-dev
+```
+
+Check `cmake --version`; your distribution's package may be older than 3.28.
+The full application also requires the host CUDA 13.0, DeepStream 8.0, GStreamer
+development files, and Basler Pylon SDK.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+CMake fetches the pinned Eigen, CANdle-SDK, and Kalman dependencies into
+`build/_deps`. The first configure needs network access and SSH access to the
+Kalman repository. CANdle-SDK does not supply libusb for Linux; it uses the
+development files installed above.
+
+### Optional Nix environment
+
+```sh
+nix develop --accept-flake-config
+```
+
+The development shell provides build tools, libusb headers/library, and formatting
+and lint tools. It uses the host compiler and NVIDIA SDKs rather than supplying
+them. Run the same CMake commands inside the shell; Nix does not build the
+application or fetch its CMake dependencies. The flake requests relaxed sandboxing
+and sets `__noChroot = true`; the Nix daemon must allow that setting.
