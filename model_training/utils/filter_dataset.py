@@ -64,7 +64,8 @@ def filter_coco_dataset(config, output_dir, min_size=None):
         src = os.path.join(root, ds_cfg[key])
         dst = filtered_dir / f"{split}_annotations.coco.json"
         stats = filter_split(src, dst, min_size)
-        ds_cfg[key] = str(dst)
+        # Absolute, so joining it onto the dataset root later is a no-op.
+        ds_cfg[key] = str(dst.resolve())
 
         dropped_images = stats["images_before"] - stats["images_after"]
         dropped_annotations = stats["annotations_before"] - stats["annotations_after"]
