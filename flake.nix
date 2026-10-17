@@ -25,7 +25,7 @@
           ...
         }:
         let
-          buildInputs = [ pkgs.eigen ];
+          buildInputs = [ ];
 
           # Development-only tools that do not take part in the build.
           devInputs =
@@ -94,7 +94,6 @@
               pre-commit install
               export CMAKE_EXPORT_COMPILE_COMMANDS=ON
               # Let the host cmake resolve find_package(Eigen3) to the pinned eigen.
-              export CMAKE_PREFIX_PATH="${pkgs.eigen}''${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
             '';
           };
         };

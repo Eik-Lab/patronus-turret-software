@@ -52,17 +52,7 @@ set(KALMAN_INSTALL
     OFF
     CACHE BOOL "" FORCE)
 
-if(NOT TARGET Eigen3::Eigen AND NOT Eigen3_FOUND)
-  find_package(Eigen3 3.4 QUIET NO_MODULE)
-endif()
-if(NOT Eigen3_FOUND AND NOT TARGET Eigen3::Eigen)
-  message(
-    FATAL_ERROR
-      "Eigen3 >= 3.4 not found — required by kalman-cpp.\n"
-      "  nix develop                       # the flake devShell provides eigen\n"
-      "  sudo apt-get install libeigen3-dev\n"
-      "  -DEigen3_DIR=/path/to/eigen/share/eigen3/cmake")
-endif()
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 
 # EXCLUDE_FROM_ALL on both: only what our targets link against gets built.
 FetchContent_MakeAvailable(candlesdk kalman_cpp)
