@@ -13,10 +13,23 @@ class CocoDetectionDataset(torchvision.datasets.CocoDetection):
         super().__init__(img_folder, ann_file)
         self.processor = processor
         self.transform = transform
+        # COCO category ids (e.g. 1..90 with gaps) -> contiguous model label
+        # indices, in the same sorted-id order base.py uses to build id2label.
+        # The HF processors pass category_id through untouched, and the model
+        # head only has num_labels slots, so raw ids would index out of range.
+        self._category_map = {
+            cat_id: idx for idx, cat_id in enumerate(sorted(self.coco.getCatIds()))
+        }
 
     def __getitem__(self, idx):
         img, target = super().__getitem__(idx)
         image_id = self.ids[idx]
+
+        target = [
+            {**ann, "category_id": self._category_map.get(ann["category_id"],
+                                                          ann["category_id"])}
+            for ann in target
+        ]
 
         if self.transform is not None:
             augmented = self.transform(

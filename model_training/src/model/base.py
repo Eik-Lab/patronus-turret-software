@@ -47,11 +47,20 @@ class HFDetModel(Model):
         )
 
         def collate_fn(batch):
-            pixel_values = [item["pixel_values"] for item in batch]
-            encoding = image_processor.pad(pixel_values, return_tensors="pt")
+            # transformers v5 replaced batch pad() with a per-image API; our
+            # forced square resize already yields uniform sizes, so stack them
+            # and hand the model an all-ones mask (no pixels are padded).
+            pixel_values = torch.stack([item["pixel_values"] for item in batch])
+            pixel_mask = torch.ones(
+                pixel_values.shape[0],
+                pixel_values.shape[2],
+                pixel_values.shape[3],
+                dtype=torch.long,
+                device=pixel_values.device,
+            )
             return {
-                "pixel_values": encoding["pixel_values"],
-                "pixel_mask": encoding["pixel_mask"],
+                "pixel_values": pixel_values,
+                "pixel_mask": pixel_mask,
                 "labels": [item["labels"] for item in batch],
             }
 
@@ -62,6 +71,13 @@ class HFDetModel(Model):
         # transformers v5 dropped TrainingArguments.logging_dir; TensorBoard now
         # reads TENSORBOARD_LOGGING_DIR, so point it at our shared tb root.
         os.environ["TENSORBOARD_LOGGING_DIR"] = train_cfg["tensorboard_dir"]
+
+        # transformers v5 raises for models without gradient-checkpointing
+        # support (RF-DETR, D-FINE) — honour the config only when supported.
+        gc_requested = train_cfg.get("gradient_checkpointing", False)
+        gc_supported = getattr(self.model_class, "supports_gradient_checkpointing", False)
+        if gc_requested and not gc_supported:
+            print(f"  note: {self.name} has no gradient checkpointing support; continuing without it")
 
         args = TrainingArguments(
             output_dir=train_cfg["output_dir"],
@@ -89,9 +105,15 @@ class HFDetModel(Model):
             eval_do_concat_batches=False,
             bf16=use_bf16,
             fp16=torch.cuda.is_available() and not use_bf16,
-            gradient_checkpointing=train_cfg.get("gradient_checkpointing", False),
+            gradient_checkpointing=gc_requested and gc_supported,
             gradient_checkpointing_kwargs={"use_reentrant": False},
-            load_best_model_at_end=True,
+            # Trainer._load_best_model() reloads the best checkpoint with a raw
+            # load_state_dict(), but transformers v5 saves checkpoints in the
+            # model's original weight layout (revert_weight_conversion) — the
+            # key conversion never happens and the best weights silently fail
+            # to load. We reload the best checkpoint ourselves after training
+            # via from_pretrained, which applies the conversion.
+            load_best_model_at_end=False,
             metric_for_best_model="map",
             greater_is_better=True,
             remove_unused_columns=False,
@@ -128,6 +150,22 @@ class HFDetModel(Model):
         print(f"\n=== Training {model_cfg['name']} ({self.name}) ===")
         print(f"  TensorBoard: tensorboard --logdir {train_cfg['tensorboard_dir']}")
         trainer.train()
+
+        # Reload the best checkpoint ourselves: from_pretrained applies the
+        # weight-layout conversion that Trainer._load_best_model skips (see
+        # the TrainingArguments comment above). Without this, the final model
+        # would keep the last epoch's weights instead of the best epoch's.
+        best_checkpoint = trainer.state.best_model_checkpoint
+        if best_checkpoint and os.path.isfile(
+            os.path.join(best_checkpoint, "model.safetensors")
+        ):
+            best_model = self.model_class.from_pretrained(best_checkpoint)
+            trainer.accelerator.unwrap_model(trainer.model).load_state_dict(
+                best_model.state_dict()
+            )
+            del best_model
+            print(f"  reloaded best checkpoint: {best_checkpoint}")
+
         trainer.save_model(train_cfg["output_dir"])
         image_processor.save_pretrained(train_cfg["output_dir"])
         print(f"  model saved to {train_cfg['output_dir']}")
