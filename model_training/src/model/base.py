@@ -1,3 +1,4 @@
+import os
 from functools import partial
 from pathlib import Path
 
@@ -58,9 +59,12 @@ class HFDetModel(Model):
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         early_stopping_patience = train_cfg.get("early_stopping_patience", 0)
 
+        # transformers v5 dropped TrainingArguments.logging_dir; TensorBoard now
+        # reads TENSORBOARD_LOGGING_DIR, so point it at our shared tb root.
+        os.environ["TENSORBOARD_LOGGING_DIR"] = train_cfg["tensorboard_dir"]
+
         args = TrainingArguments(
             output_dir=train_cfg["output_dir"],
-            logging_dir=train_cfg["tensorboard_dir"],
             report_to=["tensorboard"],
             num_train_epochs=train_cfg["epochs"],
             per_device_train_batch_size=train_cfg["batch_size"],
@@ -68,7 +72,9 @@ class HFDetModel(Model):
             learning_rate=float(train_cfg["learning_rate"]),
             weight_decay=float(train_cfg["weight_decay"]),
             gradient_accumulation_steps=train_cfg.get("gradient_accumulation_steps", 1),
-            warmup_ratio=train_cfg.get("warmup_ratio", 0.0),
+            # v5 folded warmup_ratio into warmup_steps: a value < 1 is treated
+            # as a fraction of total training steps, so config semantics hold.
+            warmup_steps=train_cfg.get("warmup_ratio", 0.0),
             lr_scheduler_type=train_cfg.get("lr_scheduler_type", "linear"),
             max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
             optim=train_cfg.get("optimizer", "adamw_torch"),

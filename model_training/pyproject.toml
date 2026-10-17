@@ -12,6 +12,7 @@ dependencies = [
     "torch",
     "torchvision",
     "transformers>=5.0",
+    "accelerate>=1.1.0",
     "torchmetrics",
     "tensorboard",
     "pycocotools",
