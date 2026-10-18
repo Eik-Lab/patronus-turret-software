@@ -10,11 +10,11 @@
  * from NVIDIA CORPORATION is strictly prohibited.
  */
 
-#include "patronus/core/config.hpp"
-#include "patronus/core/state.hpp"
-#include "patronus/pipeline/inference_mono.hpp"
-#include "patronus/pipeline/inference_rgb.hpp"
-#include "patronus/tracking/prediction_overlay.hpp"
+#include "core/config.h"
+#include "core/state.h"
+#include "pipeline/inference_mono.h"
+#include "pipeline/inference_rgb.h"
+#include "tracking/prediction_overlay.h"
 
 #include "gstnvdsmeta.h"
 #include "nvds_yml_parser.h"

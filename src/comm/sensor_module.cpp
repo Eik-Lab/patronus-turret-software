@@ -1,4 +1,4 @@
-#include "patronus/comm/sensor_module.hpp"
+#include "comm/sensor_module.h"
 
 #include <glib.h>
 

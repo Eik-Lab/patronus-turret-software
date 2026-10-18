@@ -10,15 +10,25 @@ This project includes components under different licenses.
 The following files are original work by EIK Lab and are licensed under the MIT
 License:
 
-  include/patronus/core/types.hpp
-  include/patronus/core/state.hpp
-  include/patronus/comm/serial.hpp
-  include/patronus/tracking/aim_control.hpp
-  include/patronus/pipeline/inference_mono.hpp
-  include/patronus/pipeline/inference_rgb.hpp
-  src/main.cpp
-  src/comm/serial.cpp
+  src/core/types.h
+  src/core/state.h
+  src/core/config.h
+  src/core/config.cpp
+  src/comm/candle_motor.h
+  src/comm/candle_motor.cpp
+  src/comm/command_listener.h
+  src/comm/command_listener.cpp
+  src/comm/sensor_module.h
+  src/comm/sensor_module.cpp
+  src/tracking/aim_control.h
   src/tracking/aim_control.cpp
+  src/tracking/prediction_overlay.h
+  src/tracking/prediction_overlay.cpp
+  src/tracking/target_filter.h
+  src/tracking/target_filter.cpp
+  src/pipeline/inference_mono.h
+  src/pipeline/inference_rgb.h
+  src/main.cpp
   CMakeLists.txt
   src/CMakeLists.txt
   config/deepstream/*
@@ -54,8 +64,7 @@ SOFTWARE.
 The following files are derived from NVIDIA DeepStream SDK samples and are
 subject to NVIDIA's proprietary license:
 
-  src/pipeline/inference_mono.cpp
-  src/pipeline/inference_rgb.cpp
+  src/pipeline/inference.cpp
 
 Each of these files contains the following notice:
 

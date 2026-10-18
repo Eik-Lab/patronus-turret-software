@@ -1,7 +1,7 @@
-#include "patronus/comm/command_listener.hpp"
+#include "comm/command_listener.h"
 
-#include "patronus/pipeline/inference_mono.hpp"
-#include "patronus/pipeline/inference_rgb.hpp"
+#include "pipeline/inference_mono.h"
+#include "pipeline/inference_rgb.h"
 
 #include <glib.h>
 
