@@ -1,3 +1,6 @@
+# Use CMake's target architecture (aarch64 = Jetson, x86_64 = dGPU).
+set(LINUX_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+set(DS_VERSION 8.0)
 # Target architecture from the compiler triple (aarch64 = Jetson, x86_64 = dGPU)
 execute_process(
   COMMAND gcc -dumpmachine

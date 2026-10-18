@@ -11,6 +11,7 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -24,6 +25,19 @@ endif()
 
 # Third-party dependencies, fetched at configure time
 include(FetchContent)
+
+FetchContent_Declare(
+  Eigen3
+  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+  GIT_TAG 3147391d946bb4b6c68edd901f2add6ac1f31f8c # 3.4.0
+  OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL)
+set(BUILD_TESTING
+    OFF
+    CACHE BOOL "Build dependency tests")
+set(EIGEN_BUILD_DOC
+    OFF
+    CACHE BOOL "Build Eigen documentation")
+FetchContent_MakeAvailable(Eigen3)
 
 FetchContent_Declare(
   candlesdk
