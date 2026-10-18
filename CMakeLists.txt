@@ -66,6 +66,36 @@ set(KALMAN_INSTALL
     OFF
     CACHE BOOL "" FORCE)
 
+if(NOT TARGET Eigen3::Eigen AND NOT Eigen3_FOUND)
+  find_package(Eigen3 3.4 QUIET NO_MODULE)
+endif()
+if(NOT Eigen3_FOUND AND NOT TARGET Eigen3::Eigen)
+  message(
+    FATAL_ERROR
+      "Eigen3 >= 3.4 not found — required by kalman-cpp.\n"
+      "  nix develop                       # the flake devShell provides eigen\n"
+      "  sudo apt-get install libeigen3-dev\n"
+      "  -DEigen3_DIR=/path/to/eigen/share/eigen3/cmake")
+endif()
+
+set(DS_VERSION 8.0)
+set(DS_PATH "/opt/nvidia/deepstream/deepstream-${DS_VERSION}")
+if(NOT EXISTS "${DS_PATH}")
+  message(FATAL_ERROR "DeepStream ${DS_VERSION} not found at ${DS_PATH}")
+endif()
+
+function(check_ds_lib libname)
+  set(libpath "${DS_PATH}/lib/lib${libname}.so")
+  if(NOT EXISTS ${libpath})
+    message(FATAL_ERROR "Missing lib${libname}.so at ${libpath}\n"
+            "Please make sure DeepStream is properly installed")
+  endif()
+endfunction()
+
+foreach(nvds_lib nvdsgst_meta nvds_meta nvds_yml_parser nvdsgst_helper nvbufsurface)
+  check_ds_lib(${nvds_lib})
+endforeach()
+
 # EXCLUDE_FROM_ALL on both: only what our targets link against gets built.
 FetchContent_MakeAvailable(candlesdk kalman_cpp)
 
