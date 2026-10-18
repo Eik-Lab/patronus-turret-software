@@ -1,4 +1,4 @@
-#include "patronus/core/config.hpp"
+#include "core/config.h"
 
 #include <glib.h>
 

@@ -1,13 +1,13 @@
-#include "patronus/comm/candle_motor.hpp"
-#include "patronus/comm/command_listener.hpp"
-#include "patronus/comm/sensor_module.hpp"
-#include "patronus/core/config.hpp"
-#include "patronus/core/state.hpp"
-#include "patronus/pipeline/inference_mono.hpp"
-#include "patronus/pipeline/inference_rgb.hpp"
-#include "patronus/tracking/aim_control.hpp"
-#include "patronus/tracking/prediction_overlay.hpp"
-#include "patronus/tracking/target_filter.hpp"
+#include "comm/candle_motor.h"
+#include "comm/command_listener.h"
+#include "comm/sensor_module.h"
+#include "core/config.h"
+#include "core/state.h"
+#include "pipeline/inference_mono.h"
+#include "pipeline/inference_rgb.h"
+#include "tracking/aim_control.h"
+#include "tracking/prediction_overlay.h"
+#include "tracking/target_filter.h"
 
 #include <glib.h>
 #include <gst/gst.h>

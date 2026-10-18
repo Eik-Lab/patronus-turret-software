@@ -45,7 +45,7 @@ ForEachMacros:
   - BOOST_FOREACH
 IncludeBlocks: Regroup
 IncludeCategories:
-  - Regex:           '^"(patronus/.*)"'
+  - Regex:           '^"(comm|core|pipeline|tracking)/.*"'
     Priority:        1
     SortPriority:    0
     CaseSensitive:   true

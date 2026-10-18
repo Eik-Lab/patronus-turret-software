@@ -1,4 +1,4 @@
-#include "patronus/tracking/aim_control.hpp"
+#include "tracking/aim_control.h"
 
 #include <algorithm>
 #include <cmath>
