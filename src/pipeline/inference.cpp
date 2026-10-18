@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 
 namespace patronus::pipeline {
@@ -79,6 +80,12 @@ namespace {
     const tracking::PredictionChannel *predictions{nullptr};
     GMainLoop *loop{nullptr};
 
+    /// This camera's `pylonsrc` element, published while the pipeline is up so the
+    /// command thread can reach the camera, withdrawn before teardown. Null when
+    /// the pipeline is not running.
+    GstElement *source{nullptr};
+    std::mutex source_mutex;
+
     // --- Per-frame state, touched only by this camera's streaming thread ---
 
     uint64_t frame_id{0};
@@ -91,6 +98,33 @@ namespace {
   };
 
   CameraContext g_ctx[2];
+
+  /// Publish this camera's `pylonsrc` element, or withdraw it again by passing
+  /// nullptr before the element is destroyed. Guarded by `source_mutex`.
+  void set_source(CameraContext &ctx, GstElement *source) {
+    const std::scoped_lock lock(ctx.source_mutex);
+    ctx.source = source;
+  }
+
+  /// Scale the live camera's exposure by `factor`, clamped to [min_us, max_us].
+  /// Reached through the running pipeline's own node map: a second Pylon handle on
+  /// an already-open device fails.
+  void adjust_exposure(Camera camera, double factor, double min_us, double max_us) {
+    CameraContext &ctx = g_ctx[static_cast<int>(camera)];
+    const std::scoped_lock lock(ctx.source_mutex);
+    if (ctx.source == nullptr)
+      return;
+
+    GObject *cam = gst_child_proxy_get_child_by_name(GST_CHILD_PROXY(ctx.source), "cam");
+    if (cam == nullptr)
+      return;
+
+    gint64 current_us = 0;
+    g_object_get(cam, "ExposureTime", &current_us, nullptr);
+    const double target_us = std::clamp(static_cast<double>(current_us) * factor, min_us, max_us);
+    g_object_set(cam, "ExposureTime", static_cast<gint64>(std::llround(target_us)), nullptr);
+    g_object_unref(cam);
+  }
 
   constexpr NvOSD_ColorParams k_colour_prediction{1.0, 0.0, 0.0, 1.0};  // red
   constexpr NvOSD_ColorParams k_colour_velocity{0.0, 0.0, 1.0, 1.0};    // blue
@@ -607,6 +641,7 @@ namespace {
 
     LOG(Info, "Using pylonsrc (Basler camera serial " << config.camera_serial_ << ')');
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
+    set_source(*ctx, source);
     return pipeline;
   }
 
@@ -639,6 +674,8 @@ namespace {
     g_main_loop_run(loop);
 
     LOG(Info, "Returned, stopping playback");
+    // Withdraw the element before it is destroyed.
+    set_source(ctx, nullptr);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(GST_OBJECT(pipeline));
     g_main_loop_unref(loop);
@@ -672,6 +709,14 @@ void stop_pipeline_rgb() {
 void stop_pipeline_mono() {
   if (g_ctx[static_cast<int>(Camera::Mono)].loop != nullptr)
     g_main_loop_quit(g_ctx[static_cast<int>(Camera::Mono)].loop);
+}
+
+void adjust_exposure_rgb(double factor, double min_us, double max_us) {
+  adjust_exposure(Camera::Rgb, factor, min_us, max_us);
+}
+
+void adjust_exposure_mono(double factor, double min_us, double max_us) {
+  adjust_exposure(Camera::Mono, factor, min_us, max_us);
 }
 
 } // namespace patronus::pipeline
