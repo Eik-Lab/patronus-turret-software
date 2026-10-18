@@ -7,7 +7,7 @@ repos:
         name: treefmt
         entry: treefmt --fail-on-change
         language: system
-        files: '\.(nix|c|cc|cpp|h|hh|hpp|cu|cuh|cmake)$|(^|/)CMakeLists\.txt$'
+        files: '\.(nix|c|cc|cpp|h|cu|cuh|cmake)$|(^|/)CMakeLists\.txt$'
       - id: clang-tidy
         name: clang-tidy
         entry: clang-tidy --fix -p build

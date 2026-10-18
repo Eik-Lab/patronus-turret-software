@@ -30,7 +30,7 @@ if(CLANG_TIDY
    AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "")
   set(CMAKE_CXX_CLANG_TIDY
       "${CLANG_TIDY}" "--extra-arg=-std=c++17"
-      "--extra-arg=-I${PROJECT_SOURCE_DIR}/include" "--warnings-as-errors=*")
+      "--extra-arg=-I${CMAKE_CURRENT_SOURCE_DIR}" "--warnings-as-errors=*")
   message("-- clang-tidy: ${CLANG_TIDY}")
 else()
   unset(CMAKE_CXX_CLANG_TIDY CACHE)
@@ -53,11 +53,25 @@ set(INFERENCE_SOURCES
     comm/command_listener.cpp
     comm/sensor_module.cpp)
 
+set(INFERENCE_HEADERS
+    core/config.h
+    core/state.h
+    core/types.h
+    pipeline/inference_mono.h
+    pipeline/inference_rgb.h
+    tracking/aim_control.h
+    tracking/prediction_overlay.h
+    tracking/target_filter.h
+    comm/candle_motor.h
+    comm/command_listener.h
+    comm/sensor_module.h)
+
 add_executable(inference ${INFERENCE_SOURCES})
+target_sources(inference PRIVATE ${INFERENCE_HEADERS})
 
 target_include_directories(
   inference
-  PRIVATE ${PROJECT_SOURCE_DIR}/include
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${SRC_INC2}
           /usr/local/cuda-${CUDA_VER}/include
           /usr/include/gstreamer-1.0

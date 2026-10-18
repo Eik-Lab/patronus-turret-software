@@ -1,4 +1,4 @@
-#include "patronus/tracking/prediction_overlay.hpp"
+#include "tracking/prediction_overlay.h"
 
 namespace patronus::tracking {
 

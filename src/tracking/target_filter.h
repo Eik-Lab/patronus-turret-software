@@ -1,8 +1,8 @@
 #pragma once
 
-#include "patronus/core/config.hpp"
-#include "patronus/core/state.hpp"
-#include "patronus/core/types.hpp"
+#include "core/config.h"
+#include "core/state.h"
+#include "core/types.h"
 
 #include <cmath>
 #include <cstddef>

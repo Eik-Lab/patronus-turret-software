@@ -1,8 +1,8 @@
 #pragma once
 
-#include "patronus/core/config.hpp"
-#include "patronus/core/state.hpp"
-#include "patronus/tracking/prediction_overlay.hpp"
+#include "core/config.h"
+#include "core/state.h"
+#include "tracking/prediction_overlay.h"
 
 namespace patronus::pipeline {
 

@@ -8,7 +8,7 @@ includes = ["*.nix"]
 [formatter.clang-format]
 command = "clang-format"
 options = ["-i"]
-includes = ["*.c", "*.cc", "*.cpp", "*.h", "*.hh", "*.hpp", "*.cu", "*.cuh"]
+includes = ["*.c", "*.cc", "*.cpp", "*.h", "*.cu", "*.cuh"]
 
 [formatter.cmake-format]
 command = "cmake-format"

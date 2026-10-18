@@ -88,11 +88,12 @@ function(check_ds_lib libname)
   set(libpath "${DS_PATH}/lib/lib${libname}.so")
   if(NOT EXISTS ${libpath})
     message(FATAL_ERROR "Missing lib${libname}.so at ${libpath}\n"
-            "Please make sure DeepStream is properly installed")
+                        "Please make sure DeepStream is properly installed")
   endif()
 endfunction()
 
-foreach(nvds_lib nvdsgst_meta nvds_meta nvds_yml_parser nvdsgst_helper nvbufsurface)
+foreach(nvds_lib nvdsgst_meta nvds_meta nvds_yml_parser nvdsgst_helper
+                 nvbufsurface)
   check_ds_lib(${nvds_lib})
 endforeach()
 
