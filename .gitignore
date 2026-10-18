@@ -22,6 +22,8 @@
 
 .vscode/
 src/build/
+# Runtime log file written by src/log.h
+patronus.log
 **/*.mp4
 **/*.h264
 **/*.caffemodel

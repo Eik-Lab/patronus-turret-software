@@ -1,5 +1,7 @@
 #include "core/config.h"
 
+#include "log.h"
+
 #include <glib.h>
 
 #include <algorithm>
@@ -160,7 +162,7 @@ SystemConfig load_config(const std::string &path) {
   GError *err = nullptr;
 
   if (!g_key_file_load_from_file(kf, path.c_str(), G_KEY_FILE_NONE, &err)) {
-    g_warning("Failed to load config '%s': %s", path.c_str(), err->message);
+    LOG(Error, "Failed to load config '" << path << "': " << err->message);
     g_error_free(err);
     g_key_file_free(kf);
     return sys;
@@ -169,6 +171,7 @@ SystemConfig load_config(const std::string &path) {
   // [general]
   sys.mode_ = read_string(kf, "general", "mode", "both");
   sys.tracking_ = read_bool(kf, "general", "tracking", false);
+  sys.log_level_ = read_string(kf, "general", "log_level", "warning");
 
   // [rgb]
   if (g_key_file_has_group(kf, "rgb"))

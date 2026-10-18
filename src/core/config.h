@@ -102,6 +102,7 @@ struct CommandConfig {
 struct SystemConfig {
   std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
   bool tracking_{false};                     ///< Enable tracking loop.
+  std::string log_level_{"warning"};         ///< Min level: debug, info, warning, error, critical.
   PipelineConfig rgb_;                       ///< RGB pipeline config.
   PipelineConfig mono_;                      ///< Mono pipeline config.
   SensorConfig sensor_;                      ///< Sensor module config.
@@ -114,8 +115,8 @@ struct SystemConfig {
 /// @brief Load system configuration from a GLib-format .ini file.
 /// @param path  Absolute or CWD-relative path to the .ini file.
 /// @return Populated SystemConfig with defaults for any missing keys.
-/// @note Uses GKeyFile under the hood. Logs warnings via g_warning for
-///       parse issues but always returns a valid (defaulted) config.
+/// @note Uses GKeyFile under the hood. Reports parse issues through
+///       LOG(level, ...) (see log.h) but always returns a valid config.
 [[nodiscard]] SystemConfig load_config(const std::string &path);
 
 } // namespace patronus::config

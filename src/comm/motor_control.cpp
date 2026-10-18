@@ -20,6 +20,7 @@
 
 // Config file reading
 #include "json.hpp"
+#include "log.h"
 
 #include <fstream>
 #include <optional>
@@ -44,7 +45,7 @@ std::vector<PID_gains> loadPID_gains(const std::string &filename) {
 
   std::ifstream configFile(filename);
   if (!configFile.is_open()) {
-    std::cerr << "No config file found" << std::endl;
+    LOG(Error, "No config file found");
     return PID_values;
   }
 
@@ -65,7 +66,7 @@ std::vector<PID_gains> loadPID_gains(const std::string &filename) {
     }
 
   } catch (const std::exception &e) {
-    std::cerr << "Failed to read " << filename << ": " << e.what() << std::endl;
+    LOG(Error, "Failed to read " << filename << ": " << e.what());
     return PID_values;
   }
 
@@ -109,7 +110,7 @@ MotorInit motor_init() {
   }
 
   if (motors.empty()) {
-    std::cerr << "No motor drivers initiated!" << std::endl;
+    LOG(Error, "No motor drivers initiated!");
   }
 
   return MotorInit{candle, motors};
@@ -126,7 +127,7 @@ bool find_barrier(MotorHandle &cal_motor, float direction, float boot_step, floa
   // Start from where the motor actually is
   auto start = cal_motor.md.getPosition();
   if (start.second != mab::MD::Error_t::OK) {
-    std::cerr << "Motor " << cal_motor.gains.id << ": could not read position" << std::endl;
+    LOG(Error, "Motor " << cal_motor.gains.id << ": could not read position");
     return false;
   }
 
@@ -150,8 +151,7 @@ bool find_barrier(MotorHandle &cal_motor, float direction, float boot_step, floa
     auto pos = cal_motor.md.getPosition();
     if (pos.second != mab::MD::Error_t::OK) {
       if (++readErrors > max_read_errors) {
-        std::cerr << "Motor " << cal_motor.gains.id << ": too many failed position reads"
-                  << std::endl;
+        LOG(Error, "Motor " << cal_motor.gains.id << ": too many failed position reads");
         return false;
       }
       continue; // A failed read returns 0, so don't use it
@@ -173,7 +173,7 @@ bool find_barrier(MotorHandle &cal_motor, float direction, float boot_step, floa
     }
   }
 
-  std::cerr << "Motor " << cal_motor.gains.id << ": no barrier found (timeout)" << std::endl;
+  LOG(Error, "Motor " << cal_motor.gains.id << ": no barrier found (timeout)");
   return false;
 }
 
@@ -202,14 +202,14 @@ void calibrate(std::vector<MotorHandle *> &motor_group, float kp, float kd, floa
               find_barrier(*cal_motor, -1.0f, boot_step, max_lead, lower);
 
     if (!ok) {
-      std::cerr << "Motor " << cal_motor->gains.id << ": calibration FAILED" << std::endl;
+      LOG(Error, "Motor " << cal_motor->gains.id << ": calibration FAILED");
       cal_motor->md.disable();
       continue;
     }
 
     if (upper - lower <= 2.0f * backoff) {
-      std::cerr << "Motor " << cal_motor->gains.id << ": range (" << (upper - lower)
-                << " rad) is too small for a backoff of " << backoff << " rad" << std::endl;
+      LOG(Warning, "Motor " << cal_motor->gains.id << ": range (" << (upper - lower)
+                            << " rad) is too small for a backoff of " << backoff << " rad");
       cal_motor->md.disable();
       continue;
     }
@@ -263,8 +263,8 @@ void boot_sequence(MotorInit &init) {
 // Set speed
 void set_velocityPID(MotorInit &init, const std::vector<float> &velocities) {
   if (init.motors.size() != velocities.size()) {
-    std::cerr << "Invalid values! Expected " << init.motors.size() << " speeds, got "
-              << velocities.size() << std::endl;
+    LOG(Error,
+        "Invalid values! Expected " << init.motors.size() << " speeds, got " << velocities.size());
   } else {
     int i = 0;
     for (auto &handle : init.motors) {
@@ -345,8 +345,12 @@ std::vector<std::string> split(const std::string &text, char delimiter) {
 }
 
 int main() {
+  // Human-driven tool with prompts on stdin: every prompt is an Info line, which
+  // the default WARNING minimum would otherwise swallow.
+  set_log_level(Level::Info);
+
   // Ask if you want to calibrate
-  std::cout << "Initiate motors and run calibration? (Y/N)" << std::endl;
+  LOG(Info, "Initiate motors and run calibration? (Y/N)");
   std::string answer;
   std::getline(std::cin, answer);
 
@@ -375,20 +379,20 @@ int main() {
   std::thread control(control_loop, std::ref(init));
 
   // Print out available motors
-  std::cout << "Available motors:" << std::endl;
+  LOG(Info, "Available motors:");
 
   for (auto &motor : init.motors) {
-    std::cout << "Motor id: " << motor.gains.id << " (" << motor.gains.role << ") ";
     if (motor.calibrated) {
-      std::cout << "limits: [" << motor.min_pos << ", " << motor.max_pos << "] rad" << std::endl;
+      LOG(Info, "Motor id: " << motor.gains.id << " (" << motor.gains.role << ")"
+                             << " limits: [" << motor.min_pos << ", " << motor.max_pos << "] rad");
     } else {
-      std::cout << "NOT calibrated - will be held at zero speed" << std::endl;
+      LOG(Info, "Motor id: " << motor.gains.id << " (" << motor.gains.role << ")"
+                             << " NOT calibrated - will be held at zero speed");
     }
   }
 
-  std::cout << "Please give each motor a speed. Format: '0.5, 0.3, 0.2, 0.5' or 'q' to quit. Make "
-               "sure they are in order"
-            << std::endl;
+  LOG(Info, "Please give each motor a speed. Format: '0.5, 0.3, 0.2, 0.5' or 'q' to quit. "
+            "Make sure they are in order");
 
   // Ask for speeds. Apply if given, and wait for next set of speed
   bool quit = false;
@@ -416,15 +420,14 @@ int main() {
         }
 
         if (speed_float.size() != init.motors.size()) {
-          std::cerr << "Expected " << init.motors.size() << " speeds, got " << speed_float.size()
-                    << std::endl;
+          LOG(Error, "Expected " << init.motors.size() << " speeds, got " << speed_float.size());
         } else {
           // Hand the new speeds to the control thread
           std::lock_guard<std::mutex> lock(targets_mutex);
           targets = speed_float;
         }
       } catch (const std::exception &e) {
-        std::cerr << "Invalid format (skill issue)" << std::endl;
+        LOG(Error, "Invalid format (skill issue)");
       }
     }
   }

@@ -17,6 +17,7 @@
 #include "tracking/prediction_overlay.h"
 
 #include "gstnvdsmeta.h"
+#include "log.h"
 #include "nvds_yml_parser.h"
 
 #include <glib.h>
@@ -424,16 +425,16 @@ namespace {
     GMainLoop *loop = static_cast<GMainLoop *>(data);
     switch (GST_MESSAGE_TYPE(msg)) {
       case GST_MESSAGE_EOS:
-        g_print("End of stream\n");
+        LOG(Info, "End of stream");
         g_main_loop_quit(loop);
         break;
       case GST_MESSAGE_ERROR: {
         gchar *debug = nullptr;
         GError *error = nullptr;
         gst_message_parse_error(msg, &error, &debug);
-        g_printerr("ERROR from element %s: %s\n", GST_OBJECT_NAME(msg->src), error->message);
+        LOG(Error, "ERROR from element " << GST_OBJECT_NAME(msg->src) << ": " << error->message);
         if (debug != nullptr)
-          g_printerr("Error details: %s\n", debug);
+          LOG(Error, "Error details: " << debug);
         g_free(debug);
         g_error_free(error);
         g_main_loop_quit(loop);
@@ -483,7 +484,7 @@ namespace {
 
     if (yaml_config && NVDS_YAML_PARSER_SUCCESS !=
                          nvds_parse_gie_type(&pgie_type, infer_config_abs, "primary-gie")) {
-      g_printerr("Error in parsing configuration file.\n");
+      LOG(Error, "Error in parsing configuration file.");
       return fail(nullptr);
     }
 
@@ -507,7 +508,7 @@ namespace {
         nvvidconv_pre == nullptr || streammux == nullptr || nvvidconv == nullptr ||
         nvosd == nullptr || nvvidconv_post == nullptr || capsfilter_encoder == nullptr ||
         encoder == nullptr || payload_encode == nullptr || udp_sink == nullptr) {
-      g_printerr("One element could not be created. Exiting.\n");
+      LOG(Error, "One element could not be created. Exiting.");
       return fail(pipeline);
     }
 
@@ -534,7 +535,7 @@ namespace {
                          ? gst_element_factory_make("nvinferserver", "primary-nvinference-engine")
                          : gst_element_factory_make("nvinfer", "primary-nvinference-engine");
     if (pgie == nullptr) {
-      g_printerr("Inference engine could not be created. Exiting.\n");
+      LOG(Error, "Inference engine could not be created. Exiting.");
       return fail(pipeline);
     }
 
@@ -547,7 +548,7 @@ namespace {
       if (NVDS_YAML_PARSER_SUCCESS !=
             nvds_parse_streammux(streammux, infer_config_abs, "streammux") ||
           NVDS_YAML_PARSER_SUCCESS != nvds_parse_gie(pgie, infer_config_abs, "primary-gie")) {
-        g_printerr("Error in parsing configuration file.\n");
+        LOG(Error, "Error in parsing configuration file.");
         return fail(pipeline);
       }
     } else if (infer_config_abs != nullptr) {
@@ -565,18 +566,18 @@ namespace {
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter_src, nvvidconv_pre, streammux, pgie,
                      nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode,
                      udp_sink, nullptr);
-    g_print("Added elements to bin\n");
+    LOG(Debug, "Added elements to bin");
 
     // The muxer sink pad is requested rather than statically linked: nvstreammux
     // only exposes it once the pipeline has a sink.
     GstPad *sinkpad = gst_element_request_pad_simple(streammux, "sink_0");
     if (sinkpad == nullptr) {
-      g_printerr("Streammux request sink pad failed. Exiting.\n");
+      LOG(Error, "Streammux request sink pad failed. Exiting.");
       return fail(pipeline);
     }
     GstPad *srcpad = gst_element_get_static_pad(nvvidconv_pre, "src");
     if (srcpad == nullptr) {
-      g_printerr("nvvideoconvert-pre request src pad failed. Exiting.\n");
+      LOG(Error, "nvvideoconvert-pre request src pad failed. Exiting.");
       gst_object_unref(sinkpad);
       return fail(pipeline);
     }
@@ -584,27 +585,27 @@ namespace {
     gst_object_unref(sinkpad);
     gst_object_unref(srcpad);
     if (!linked) {
-      g_printerr("Failed to link source to stream muxer. Exiting.\n");
+      LOG(Error, "Failed to link source to stream muxer. Exiting.");
       return fail(pipeline);
     }
 
     if (!gst_element_link_many(source, capsfilter_src, nvvidconv_pre, nullptr) ||
         !gst_element_link_many(streammux, pgie, nvvidconv, nvosd, nvvidconv_post,
                                capsfilter_encoder, encoder, payload_encode, udp_sink, nullptr)) {
-      g_printerr("Elements could not be linked. Exiting.\n");
+      LOG(Error, "Elements could not be linked. Exiting.");
       return fail(pipeline);
     }
 
     GstPad *osd_sink_pad = gst_element_get_static_pad(nvosd, "sink");
     if (osd_sink_pad == nullptr) {
-      g_print("Unable to get OSD sink pad\n");
+      LOG(Error, "Unable to get OSD sink pad");
     } else {
       gst_pad_add_probe(osd_sink_pad, GST_PAD_PROBE_TYPE_BUFFER, osd_sink_pad_buffer_probe, ctx,
                         nullptr);
       gst_object_unref(osd_sink_pad);
     }
 
-    g_print("Using pylonsrc (Basler camera serial %s)\n", config.camera_serial_.c_str());
+    LOG(Info, "Using pylonsrc (Basler camera serial " << config.camera_serial_ << ')');
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
     return pipeline;
   }
@@ -634,10 +635,10 @@ namespace {
       return -1;
     }
 
-    g_print("Running...\n");
+    LOG(Info, "Running...");
     g_main_loop_run(loop);
 
-    g_print("Returned, stopping playback\n");
+    LOG(Info, "Returned, stopping playback");
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(GST_OBJECT(pipeline));
     g_main_loop_unref(loop);

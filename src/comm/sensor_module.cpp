@@ -1,6 +1,6 @@
 #include "comm/sensor_module.h"
 
-#include <glib.h>
+#include "log.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <string>
 #include <string_view>
 
@@ -31,8 +32,7 @@ namespace {
     if (baud_str == "B115200")
       return B115200;
 
-    g_warning("Unsupported baud rate string '%.*s', defaulting to B115200",
-              static_cast<int>(baud_str.size()), baud_str.data());
+    LOG(Warning, "Unsupported baud rate string '" << baud_str << "', defaulting to B115200");
     return B115200;
   }
 
@@ -59,7 +59,7 @@ namespace {
   int serial_open(const char *portname) {
     const int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
     if (fd < 0)
-      g_warning("Error opening %s: %s", portname, std::strerror(errno));
+      LOG(Error, "Error opening " << portname << ": " << std::strerror(errno));
     return fd;
   }
 
@@ -67,14 +67,14 @@ namespace {
     termios tty{};
 
     if (tcgetattr(fd, &tty) == -1) {
-      g_warning("tcgetattr: %s", std::strerror(errno));
+      LOG(Error, "tcgetattr: " << std::strerror(errno));
       return false;
     }
 
     cfmakeraw(&tty);
 
     if (cfsetispeed(&tty, speed) == -1 || cfsetospeed(&tty, speed) == -1) {
-      g_warning("Failed to set speed: %s", std::strerror(errno));
+      LOG(Error, "Failed to set speed: " << std::strerror(errno));
       return false;
     }
 
@@ -85,12 +85,12 @@ namespace {
     tty.c_cc[VTIME] = 5; // ...after at most 0.5 s.
 
     if (tcsetattr(fd, TCSANOW, &tty) == -1) {
-      g_warning("tcsetattr: %s", std::strerror(errno));
+      LOG(Error, "tcsetattr: " << std::strerror(errno));
       return false;
     }
 
     if (tcflush(fd, TCIFLUSH) == -1) {
-      g_warning("tcflush: %s", std::strerror(errno));
+      LOG(Error, "tcflush: " << std::strerror(errno));
       return false;
     }
 
@@ -123,7 +123,7 @@ namespace {
       if (ready < 0) {
         if (errno == EINTR)
           continue;
-        g_warning("Sensor poll error: %s", std::strerror(errno));
+        LOG(Error, "Sensor poll error: " << std::strerror(errno));
         return false;
       }
 
@@ -131,7 +131,7 @@ namespace {
         continue;
 
       if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-        g_warning("Sensor serial port disconnected");
+        LOG(Warning, "Sensor serial port disconnected");
         return false;
       }
 
@@ -141,12 +141,12 @@ namespace {
       if (bytes_read < 0) {
         if (errno == EINTR)
           continue;
-        g_warning("Sensor read error: %s", std::strerror(errno));
+        LOG(Error, "Sensor read error: " << std::strerror(errno));
         return false;
       }
 
       if (bytes_read == 0) {
-        g_warning("Sensor serial port closed");
+        LOG(Warning, "Sensor serial port closed");
         return false;
       }
 
@@ -203,44 +203,46 @@ void run_sensor_thread(const std::string &port, const std::string &baud_str,
   const speed_t baud_speed = baud_string_to_speed(baud_str);
 
   if (is_candle_port(port.c_str())) {
-    g_warning("Sensor module: %s is the CANdle adapter, not a sensor — sensor disabled. "
-              "Set [sensor] port to the sensor's device or enabled=false.",
-              port.c_str());
+    LOG(Warning, "Sensor module: "
+                   << port
+                   << " is the CANdle adapter, not a sensor — sensor disabled. Set [sensor] port "
+                      "to the sensor's device or enabled=false.");
     return;
   }
 
   const int fd = serial_open(port.c_str());
   if (fd < 0) {
-    g_critical("Failed to open sensor serial port: %s", port.c_str());
+    LOG(Error, "Failed to open sensor serial port: " << port);
     return;
   }
 
   if (!serial_configure(fd, baud_speed)) {
-    g_critical("Failed to configure sensor serial port");
+    LOG(Error, "Failed to configure sensor serial port");
     close(fd);
     return;
   }
 
-  g_print("Sensor module started: port=%s baud=%s\n", port.c_str(), baud_str.c_str());
+  LOG(Info, "Sensor module started: port=" << port << " baud=" << baud_str);
 
   while (running.load()) {
     SensorData data{};
 
     if (!read_sensor_data(fd, data, running)) {
       if (running.load())
-        g_warning("Sensor module: stopped reading %s", port.c_str());
+        LOG(Warning, "Sensor module: stopped reading " << port);
       break;
     }
 
     if (data.has_distance)
-      g_print("Distance: %.2f cm\n", data.distance);
+      LOG(Info, "Distance: " << std::fixed << std::setprecision(2) << data.distance << " cm");
 
     if (data.has_gps)
-      g_print("GPS: latitude=%.7f longitude=%.7f\n", data.latitude, data.longitude);
+      LOG(Info, "GPS: latitude=" << std::fixed << std::setprecision(7) << data.latitude
+                                 << " longitude=" << data.longitude);
   }
 
   close(fd);
-  g_print("Sensor module stopped\n");
+  LOG(Info, "Sensor module stopped");
 }
 
 } // namespace patronus::comm
