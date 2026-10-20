@@ -1,5 +1,7 @@
 #include "comm/candle_motor.h"
 
+#include "log.h"
+
 #include <algorithm>
 #include <candlelib.hpp>
 #include <chrono>
@@ -36,18 +38,18 @@ CandleMotor::~CandleMotor() {
 
 bool CandleMotor::enable_pds() {
   if (bus_cfg_.pds_node_id_ == 0) {
-    std::printf("CandleMotor: PDS init skipped (pds_node_id_=0)\n");
+    LOG(Debug, "CandleMotor: PDS init skipped (pds_node_id_=0)");
     return true;
   }
 
   pds_ = std::make_unique<mab::Pds>(bus_cfg_.pds_node_id_, candle_);
   if (pds_->init() != mab::PdsModule::error_E::OK) {
-    std::fprintf(stderr, "CandleMotor: PDS%u not found on bus — continuing without PDS\n",
-                 bus_cfg_.pds_node_id_);
+    LOG(Warning, "CandleMotor: PDS" << bus_cfg_.pds_node_id_
+                                    << " not found on bus — continuing without PDS");
     pds_.reset();
     return true;
   }
-  std::printf("CandleMotor: PDS%u initialised\n", bus_cfg_.pds_node_id_);
+  LOG(Info, "CandleMotor: PDS" << bus_cfg_.pds_node_id_ << " initialised");
 
   const auto modules = pds_->getModules();
   const mab::socketIndex_E sockets[] = {
@@ -66,12 +68,12 @@ bool CandleMotor::enable_pds() {
     if (ps) {
       ps->enable();
       power_stages_.push_back(ps);
-      std::printf("CandleMotor: power stage enabled on socket %zu\n", i + 1);
+      LOG(Info, "CandleMotor: power stage enabled on socket " << (i + 1));
     }
   }
 
   if (power_stages_.empty()) {
-    std::fprintf(stderr, "CandleMotor: no power stages found on PDS%u\n", bus_cfg_.pds_node_id_);
+    LOG(Error, "CandleMotor: no power stages found on PDS" << bus_cfg_.pds_node_id_);
     return false;
   }
 
@@ -85,16 +87,16 @@ bool CandleMotor::init() {
   try {
     candle_ = mab::attachCandle(to_datarate(bus_cfg_.datarate_), mab::candleTypes::busTypes_t::USB);
   } catch (const std::runtime_error &e) {
-    std::fprintf(stderr, "CandleMotor: failed to attach CANdle device — %s\n", e.what());
+    LOG(Error, "CandleMotor: failed to attach CANdle device — " << e.what());
     return false;
   }
   if (candle_ == nullptr) {
-    std::fprintf(stderr, "CandleMotor: failed to attach CANdle device\n");
+    LOG(Error, "CandleMotor: failed to attach CANdle device");
     return false;
   }
 
   if (!enable_pds()) {
-    std::fprintf(stderr, "CandleMotor: PDS power stage enable failed\n");
+    LOG(Error, "CandleMotor: PDS power stage enable failed");
     disable();
     return false;
   }
@@ -111,8 +113,8 @@ bool CandleMotor::init() {
     // Shared velocity-PID settings for both axes
     for (auto *md : {pan_motors_[g].get(), tilt_motors_[g].get()}) {
       if (md->init() != mab::MD::Error_t::OK) {
-        std::fprintf(stderr, "CandleMotor: MD%u (gimbal %zu) did not respond — check node id\n",
-                     md->m_canId, g);
+        LOG(Error, "CandleMotor: MD" << md->m_canId << " (gimbal " << g
+                                     << ") did not respond — check node id");
         disable();
         return false;
       }
@@ -123,8 +125,8 @@ bool CandleMotor::init() {
       md->enable();
     }
 
-    std::printf("CandleMotor: gimbal %zu — pan=MD%u tilt=MD%u\n", g, pan_motors_[g]->m_canId,
-                tilt_motors_[g]->m_canId);
+    LOG(Info, "CandleMotor: gimbal " << g << " — pan=MD" << pan_motors_[g]->m_canId << " tilt=MD"
+                                     << tilt_motors_[g]->m_canId);
   }
 
   return true;

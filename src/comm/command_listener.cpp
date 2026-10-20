@@ -3,7 +3,7 @@
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
 
-#include <glib.h>
+#include "log.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -54,7 +54,7 @@ void handleShoot() {
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
   int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
-    g_critical("CommandListener: Failed to create socket");
+    LOG(Error, "CommandListener: Failed to create socket");
     return;
   }
 
@@ -64,7 +64,7 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   addr.sin_addr.s_addr = inet_addr(host.c_str());
 
   if (bind(sockfd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
-    g_critical("CommandListener: Failed to bind to %s:%u", host.c_str(), port);
+    LOG(Error, "CommandListener: Failed to bind to " << host << ':' << port);
     close(sockfd);
     return;
   }
@@ -72,7 +72,7 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   timeval timeout{1, 0};
   setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-  g_print("CommandListener: Listening for commands on %s:%u\n", host.c_str(), port);
+  LOG(Info, "CommandListener: Listening for commands on " << host << ':' << port);
 
   char buffer[1024];
   while (running.load()) {
@@ -99,7 +99,7 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   }
 
   close(sockfd);
-  g_print(":CommandListener: Stopped\n");
+  LOG(Info, "CommandListener: Stopped");
 }
 
 } // namespace patronus::comm

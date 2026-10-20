@@ -9,6 +9,8 @@
 #include "tracking/prediction_overlay.h"
 #include "tracking/target_filter.h"
 
+#include "log.h"
+
 #include <glib.h>
 #include <gst/gst.h>
 
@@ -63,7 +65,7 @@ int main(int argc, char *argv[]) {
 
   GError *error = nullptr;
   if (!g_option_context_parse(ctx, &argc, &argv, &error)) {
-    g_printerr("Option parsing failed: %s\n", error->message);
+    LOG(Error, "Option parsing failed: " << error->message);
     g_error_free(error);
     g_option_context_free(ctx);
     return 1;
@@ -73,6 +75,15 @@ int main(int argc, char *argv[]) {
   std::string cfg_path = config_path ? config_path : "config/system.ini";
   SystemConfig cfg = load_config(cfg_path);
   g_free(config_path);
+
+  // Anything logged before this point used the default minimum level.
+  if (const auto level = parse_level(cfg.log_level_); level.has_value()) {
+    set_log_level(*level);
+  } else {
+    LOG(Warning, "Unknown [general] log_level '"
+                   << cfg.log_level_
+                   << "', keeping WARNING. Expected debug, info, warning, error or critical.");
+  }
 
   std::signal(SIGTERM, signal_handler);
   std::signal(SIGINT, signal_handler);
@@ -85,8 +96,9 @@ int main(int argc, char *argv[]) {
   if (mono_only)
     cfg.mode_ = "mono";
 
-  g_print("Patronus inference — mode=%s  tracking=%s  gimbals=%zu\n", cfg.mode_.c_str(),
-          cfg.tracking_ ? "on" : "off", cfg.gimbals_.size());
+  LOG(Info, "Patronus inference — mode=" << cfg.mode_
+                                         << "  tracking=" << (cfg.tracking_ ? "on" : "off")
+                                         << "  gimbals=" << cfg.gimbals_.size());
 
   // Which pipelines will actually run — gimbal threads must only consume
   // queues that have a producer.
@@ -132,7 +144,7 @@ int main(int argc, char *argv[]) {
   if (cfg.tracking_) {
     motor = std::make_shared<patronus::comm::CandleMotor>(cfg.gimbals_, cfg.can_bus_);
     if (!motor->init()) {
-      g_critical("Failed to initialise CANdle motor driver — tracking disabled");
+      LOG(Error, "Failed to initialise CANdle motor driver — tracking disabled");
       motor.reset();
     }
   }
@@ -148,10 +160,11 @@ int main(int argc, char *argv[]) {
 
     for (size_t g = 0; g < gimbal_count; ++g) {
       if (drive_motor) {
-        g_print("Tracking gimbal %zu started (max %.2f rad/s, tilt limit ±%.2f rad)\n", g,
-                cfg.gimbals_[g].max_velocity_rad_s_, cfg.gimbals_[g].tilt_max_rad_);
+        LOG(Info, "Tracking gimbal " << g << " started (max " << cfg.gimbals_[g].max_velocity_rad_s_
+                                     << " rad/s, tilt limit ±" << cfg.gimbals_[g].tilt_max_rad_
+                                     << " rad)");
       } else {
-        g_print("Gimbal %zu: prediction overlay only — motors not driven\n", g);
+        LOG(Info, "Gimbal " << g << ": prediction overlay only — motors not driven");
       }
 
       // Each gimbal gets a copy of its tracking config and shared motor handle
@@ -182,11 +195,11 @@ int main(int argc, char *argv[]) {
         const bool driving = motor != nullptr;
 
         if (driving && trk.filter_enabled_ && !filter.ego_compensation_active()) {
-          g_warning("Tracking gimbal %zu: no focal length set (focal_x_px/focal_y_px). "
-                    "Camera motion is not compensated, so the filter will read the "
-                    "gimbal's own slew as target motion. Set these from the camera's "
-                    "lens and sensor specs.",
-                    g);
+          LOG(Warning, "Tracking gimbal "
+                         << g
+                         << ": no focal length set (focal_x_px/focal_y_px). Camera motion is not "
+                            "compensated, so the filter will read the gimbal's own slew as target "
+                            "motion. Set these from the camera's lens and sensor specs.");
         }
 
         // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no
@@ -319,7 +332,7 @@ int main(int argc, char *argv[]) {
                                       trk.home_return_max_velocity_)) {
               state = State::AtHome;
               motor->set_velocity(g, 0.0F, 0.0F);
-              g_print("Tracking gimbal %zu: at home position\n", g);
+              LOG(Info, "Tracking gimbal " << g << ": at home position");
             }
             continue;
           }
@@ -329,7 +342,7 @@ int main(int argc, char *argv[]) {
           if (state == State::Tracking && trk.home_return_enabled_ &&
               now - last_detection >= std::chrono::milliseconds(trk.home_return_delay_ms_)) {
             state = State::ReturningHome;
-            g_print("Tracking gimbal %zu: lost target — returning to home\n", g);
+            LOG(Warning, "Tracking gimbal " << g << ": lost target — returning to home");
           }
         }
 
