@@ -3,28 +3,23 @@ import argparse
 import json
 from pathlib import Path
 
-from config import load_config
+import yaml
+
+from src.config import load_config
 from src.model import get_format
-from stats import explore_dataset
+from src.stats import explore_dataset
 
 
-def run(config, stats_only=False):
+def run(config):
     output_dir = config["training"]["output_dir"]
     model_format = get_format(config["model"]["type"])
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    with open(Path(output_dir) / "config.yaml", "w") as f:
+        yaml.safe_dump(config, f, sort_keys=False)
 
-    # filter -> stats -> train. Each format filters its own dataset layout; the
-    # COCO stats checker only applies to COCO-JSON formats (YOLO has its own).
+    # filter -> stats -> train
     model_format.filter(config, output_dir)
-
-    train_stats = None
-    if model_format.coco_dataset:
-        train_stats = explore_dataset(config, output_dir)
-    elif stats_only:
-        print(f"model.type '{model_format.name}' does not use the COCO stats checker")
-
-    if stats_only:
-        return {}
+    train_stats = explore_dataset(config, output_dir)
 
     metrics = model_format.train(config, train_stats)
     with open(Path(output_dir) / "results.json", "w") as f:
@@ -37,14 +32,9 @@ def main():
     parser.add_argument(
         "--config", required=True, help="path to a YAML config in train_configs/"
     )
-    parser.add_argument(
-        "--stats-only",
-        action="store_true",
-        help="run the dataset stats checker and exit without training",
-    )
     cli_args = parser.parse_args()
 
-    run(load_config(cli_args.config), cli_args.stats_only)
+    run(load_config(cli_args.config))
 
 
 if __name__ == "__main__":

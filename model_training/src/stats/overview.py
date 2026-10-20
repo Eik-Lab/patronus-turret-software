@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from palette import PRIMARY
+from src.palette import PRIMARY
 
 from .base import Stat
 

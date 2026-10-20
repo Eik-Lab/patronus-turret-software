@@ -1,7 +1,7 @@
 from transformers import AutoImageProcessor
 
-from augment import build_train_transform
-from config import resolve
+from src.config import resolve
+from src.data.augment import build_train_transform
 from src.data.coco import CocoDetectionDataset
 
 

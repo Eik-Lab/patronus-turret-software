@@ -3,8 +3,9 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
+from src.export import export_fp16
 from src.model.base import Model
-from utils.filter_dataset import filter_yolo_dataset
+from src.utils.filter_dataset import filter_yolo_dataset
 
 
 class Yolo(Model):
@@ -51,8 +52,11 @@ class Yolo(Model):
             warmup_epochs=float(train_cfg.get("warmup_epochs", 3.0)),
             optimizer=train_cfg.get("optimizer", "auto"),
             cos_lr=train_cfg.get("cos_lr", False),
+            freeze=train_cfg.get("freeze"),
+            copy_paste=float(train_cfg.get("copy_paste", 0.0)),
             workers=train_cfg["num_workers"],
             seed=train_cfg["seed"],
+            patience=train_cfg.get("early_stopping_patience", 0),
             deterministic=train_cfg.get("deterministic", True),
             project=project,
             name=name,
@@ -71,6 +75,7 @@ class Yolo(Model):
         if onnx_path.is_file():
             size_mb = onnx_path.stat().st_size / (1024 * 1024)
             print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
+            export_fp16(str(onnx_path))
 
         rd = getattr(results, "results_dict", {})
         metrics = {

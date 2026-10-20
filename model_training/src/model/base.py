@@ -13,10 +13,11 @@ from transformers import (
     TrainingArguments,
 )
 
-from metrics import compute_metrics
 from src.data.dataset import build_datasets
+from src.export import export_fp16
+from src.metrics import compute_metrics
 from src.samples import SampleGridCallback
-from utils.filter_dataset import filter_coco_dataset
+from src.utils.filter_dataset import filter_coco_dataset
 
 
 class Model:
@@ -78,33 +79,15 @@ def _remove_checkpoints(output_dir):
 
 
 def _print_summary(metrics, id2label):
-    """Print a formatted evaluation summary."""
     print("\n=== Evaluation Results ===")
-    print(f"  {'mAP':<16} {metrics.get('map', 0):.4f}")
-    print(f"  {'mAP@50':<16} {metrics.get('map_50', 0):.4f}")
-    print(f"  {'mAP@75':<16} {metrics.get('map_75', 0):.4f}")
-    print(f"  {'mAR@100':<16} {metrics.get('mar_100', 0):.4f}")
-
-    has_size = any(f"map_{s}" in metrics for s in ("small", "medium", "large"))
-    if has_size:
-        print()
-        for size in ("small", "medium", "large"):
-            m = metrics.get(f"map_{size}", -1)
-            r = metrics.get(f"mar_100_{size}", -1)
-            if m >= 0:
-                line = f"  {size:<16} mAP: {m:.4f}"
-                if r >= 0:
-                    line += f"  mAR: {r:.4f}"
-                print(line)
-
-    class_names = [n for n in id2label.values() if f"map_{n}" in metrics]
-    if class_names:
-        print(f"\n  {'Class':<20} {'mAP':>8} {'mAR@100':>8}")
-        print(f"  {'─' * 38}")
-        for name in sorted(class_names):
-            m = metrics.get(f"map_{name}", -1)
-            r = metrics.get(f"mar_100_{name}", -1)
-            print(f"  {name:<20} {m:>8.4f} {r:>8.4f}")
+    for key in ("map", "map_50", "map_75", "mar_100"):
+        if key in metrics:
+            print(f"  {key}: {metrics[key]:.4f}")
+    for size in ("small", "medium", "large"):
+        if f"map_{size}" in metrics:
+            print(f"  {size}: mAP {metrics[f'map_{size}']:.4f}")
+    for name in sorted(n for n in id2label.values() if f"map_{n}" in metrics):
+        print(f"  {name}: mAP {metrics[f'map_{name}']:.4f}  mAR {metrics.get(f'mar_100_{name}', 0):.4f}")
 
 
 class HFDetModel(Model):
@@ -165,7 +148,7 @@ class HFDetModel(Model):
             gradient_accumulation_steps=train_cfg.get(
                 "gradient_accumulation_steps", 1
             ),
-            warmup_steps=train_cfg.get("warmup_ratio", 0.0),
+            warmup_ratio=train_cfg.get("warmup_ratio", 0.0),
             lr_scheduler_type=train_cfg.get("lr_scheduler_type", "linear"),
             max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
             optim=train_cfg.get("optimizer", "adamw_torch"),
@@ -241,6 +224,7 @@ class HFDetModel(Model):
         _export_onnx(
             trainer.accelerator.unwrap_model(trainer.model), output_dir, image_size
         )
+        export_fp16(os.path.join(output_dir, "model.onnx"))
         _remove_checkpoints(output_dir)
         print(f"  model saved to {output_dir}")
 

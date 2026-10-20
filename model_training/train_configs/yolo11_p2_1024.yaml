@@ -1,0 +1,27 @@
+dataset:
+  root: ./data/drone_yolo
+  data_yaml: ./data/drone_yolo/data.yaml
+
+model:
+  type: yolo
+  name: yolo11s.pt
+  architecture: architectures/yolo11s-p2.yaml
+
+training:
+  output_dir: ./runs/yolo11_p2_1024
+  tensorboard_dir: ./runs/yolo11_p2_1024/tb
+  epochs: 100
+  batch_size: 4
+  learning_rate: 1.0e-4
+  lr_final_ratio: 0.01
+  weight_decay: 5.0e-4
+  momentum: 0.937
+  warmup_epochs: 3.0
+  cos_lr: true
+  optimizer: auto
+  freeze: 10
+  copy_paste: 0.3
+  early_stopping_patience: 10
+  image_size: 1024
+  num_workers: 8
+  seed: 42

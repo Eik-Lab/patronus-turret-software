@@ -1,6 +1,6 @@
 from collections import Counter
 
-from palette import SEQUENCE
+from src.palette import SEQUENCE
 
 from .base import Stat
 

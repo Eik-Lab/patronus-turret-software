@@ -12,12 +12,16 @@ training:
   tensorboard_dir: ./runs/yolov8_p2/tb
   epochs: 100
   batch_size: 16
-  learning_rate: 1.0e-3
+  learning_rate: 1.0e-4
   lr_final_ratio: 0.01
   weight_decay: 5.0e-4
   momentum: 0.937
   warmup_epochs: 3.0
+  cos_lr: true
   optimizer: auto
+  freeze: 10
+  copy_paste: 0.3
+  early_stopping_patience: 10
   image_size: 640
   num_workers: 8
   seed: 42

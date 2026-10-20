@@ -1,5 +1,5 @@
 from collections import Counter
-from palette import EIK_30, EIK_50, EIK_80
+from src.palette import EIK_30, EIK_50, EIK_80
 from .base import Stat
 
 # Object area as a percentage of the image area.

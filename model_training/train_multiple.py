@@ -3,13 +3,13 @@ import argparse
 import json
 from pathlib import Path
 
-from config import load_config
+from src.config import load_config
 from train import run
 
 DEFAULT_CONFIGS = [
-    "train_configs/rf_detr_large.yaml",
-    "train_configs/rf_detr.yaml",
-    "train_configs/dfine_medium.yaml",
+    "train_configs/yolov8_p2.yaml",
+    "train_configs/yolo11_p2.yaml",
+    "train_configs/yolo11_p2_1024.yaml",
 ]
 
 
@@ -21,7 +21,7 @@ def main():
         "configs",
         nargs="*",
         default=DEFAULT_CONFIGS,
-        help="paths to YAML configs in train_configs/ (default: rf-detr large, rf-detr medium, D-FINE medium)",
+        help="paths to YAML configs in train_configs/",
     )
     parser.add_argument(
         "--runs-dir",
