@@ -1,7 +1,3 @@
-"""Convert a YOLO split (images/ + labels/) into the COCO-like dict that
-the stats classes expect, so Overview / ClassDistribution / ObjectSize work
-for both dataset formats."""
-
 import os
 from pathlib import Path
 
@@ -11,21 +7,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def yolo_split_to_coco(image_dir, label_dir, class_names):
-    """Read a YOLO split and return a dict shaped like a COCO JSON.
-
-    Parameters
-    ----------
-    image_dir : str | Path
-        Directory containing images.
-    label_dir : str | Path
-        Directory containing YOLO .txt label files.
-    class_names : dict[int, str]
-        Mapping from class index to name (from data.yaml).
-
-    Returns
-    -------
-    dict  with keys "images", "annotations", "categories".
-    """
+    """Convert a YOLO split to a COCO-format dict."""
     image_dir = Path(image_dir)
     label_dir = Path(label_dir)
 

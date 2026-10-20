@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Patronus — dataset stats orchestrator.
-
-Runs every stat registered in dataset/ALL_STATS over the splits named in a
-training config.  Works with both COCO-JSON and YOLO-txt datasets.
-
-Run standalone to inspect a dataset before training:
-
-  python stats.py --config train_configs/rf_detr.yaml
-"""
 
 import argparse
 import json
@@ -23,7 +13,7 @@ import yaml
 
 from src.config import load_config, resolve
 from src.stats import ALL_STATS
-from src.stats.yolo_loader import yolo_split_to_coco
+from src.data.yolo_loader import yolo_split_to_coco
 
 
 def _load_coco_split(annotations_path):
@@ -51,11 +41,8 @@ def _load_yolo_split(data_yaml, split):
 
 
 def run_stats(coco, split_name):
-    """Run every registered stat over one split.
-
-    Returns {stat_name: result} so callers can reuse the raw numbers.
-    """
-    print(f"\n=== Dataset stats: {split_name} ===")
+    """Run all stats on a split, return {name: result}."""
+    print(f"\n{split_name}", "-"*50)
     combined = {}
     for stat in ALL_STATS:
         result = stat.compute(coco)
@@ -86,13 +73,11 @@ def check_overlap(train_coco, val_coco):
     val_names = {img["file_name"] for img in val_coco["images"]}
     overlap = train_names & val_names
     if overlap:
-        print(f"\n  WARNING: {len(overlap)} images appear in both train and val:")
+        print(f"\n  WARNING: {len(overlap)} images in both train and val")
         for name in sorted(overlap)[:10]:
             print(f"    {name}")
-        if len(overlap) > 10:
-            print(f"    ... and {len(overlap) - 10} more")
     else:
-        print("\n  train/val overlap check: OK (no shared images)")
+        print("\n  no train/val overlap")
 
 
 def explore_dataset(config, output_dir=None):

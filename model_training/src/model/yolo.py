@@ -38,7 +38,7 @@ class Yolo(Model):
         project = os.path.dirname(tb_dir) or "."
         name = os.path.basename(tb_dir)
 
-        print(f"\n=== Training {model_cfg['name']} ({self.name}) ===")
+        print(f"\nTraining {model_cfg['name']} ({self.name})", "-"*50)
         print(f"  TensorBoard: tensorboard --logdir {project}")
         results = model.train(
             data=data_yaml,
@@ -85,7 +85,7 @@ class Yolo(Model):
             "recall": rd.get("metrics/recall(B)"),
         }
 
-        print("\n=== Evaluation Results ===")
+        print("\nEvaluation results", "-"*50)
         for label, value in metrics.items():
             if value is not None:
                 print(f"  {label:<16} {value:.4f}")

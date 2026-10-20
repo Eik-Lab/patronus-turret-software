@@ -79,7 +79,7 @@ def _remove_checkpoints(output_dir):
 
 
 def _print_summary(metrics, id2label):
-    print("\n=== Evaluation Results ===")
+    print("\nEvaluation results", "-"*50)
     for key in ("map", "map_50", "map_75", "mar_100"):
         if key in metrics:
             print(f"  {key}: {metrics[key]:.4f}")
@@ -201,7 +201,7 @@ class HFDetModel(Model):
                 EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
             )
 
-        print(f"\n=== Training {model_cfg['name']} ({self.name}) ===")
+        print(f"\nTraining {model_cfg['name']} ({self.name})", "-"*50)
         print(f"  TensorBoard: tensorboard --logdir {train_cfg['tensorboard_dir']}")
         trainer.train()
 

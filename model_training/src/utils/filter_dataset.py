@@ -58,7 +58,7 @@ def filter_coco_dataset(config, output_dir, min_size=None):
     filtered_dir = Path(output_dir) / "filtered"
     filtered_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n=== Filtering dataset (min box size {min_size}px) ===")
+    print(f"\nFiltering dataset (min box size {min_size}px)", "-"*50)
     for split in ("train", "val"):
         key = f"{split}_annotations"
         src = os.path.join(root, ds_cfg[key])
@@ -154,7 +154,7 @@ def filter_yolo_dataset(config, output_dir, min_size=None):
     new_data = dict(data)
     new_data["path"] = str(filtered_root)
 
-    print(f"\n=== Filtering dataset (min box size {min_size}px) ===")
+    print(f"\nFiltering dataset (min box size {min_size}px)", "-"*50)
     for split in ("train", "val"):
         rel = data.get(split)
         if not rel:
