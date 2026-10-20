@@ -20,7 +20,7 @@ training:
   warmup_ratio: 0.05
   lr_scheduler_type: cosine
   optimizer: adamw_torch
-  image_size: 1008
+  image_size: 1024
   num_workers: 4
   logging_steps: 10
   save_total_limit: 1
