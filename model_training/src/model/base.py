@@ -1,9 +1,17 @@
 import os
+import shutil
 from functools import partial
 from pathlib import Path
 
+import onnx
 import torch
-from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
+from onnxslim import slim
+from transformers import (
+    AutoModelForObjectDetection,
+    EarlyStoppingCallback,
+    Trainer,
+    TrainingArguments,
+)
 
 from metrics import compute_metrics
 from src.data.dataset import build_datasets
@@ -22,8 +30,85 @@ class Model:
         raise NotImplementedError
 
 
+def _export_onnx(model, output_dir, image_size):
+    """Export the detection model to ONNX with onnxslim optimisation."""
+
+    class _Wrapper(torch.nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, pixel_values, pixel_mask):
+            out = self.inner(pixel_values=pixel_values, pixel_mask=pixel_mask)
+            return out.logits, out.pred_boxes
+
+    wrapper = _Wrapper(model).eval()
+    device = next(model.parameters()).device
+    dummy_pixels = torch.randn(1, 3, image_size, image_size, device=device)
+    dummy_mask = torch.ones(1, image_size, image_size, dtype=torch.long, device=device)
+
+    onnx_path = os.path.join(output_dir, "model.onnx")
+    torch.onnx.export(
+        wrapper,
+        (dummy_pixels, dummy_mask),
+        onnx_path,
+        input_names=["pixel_values", "pixel_mask"],
+        output_names=["logits", "pred_boxes"],
+        dynamic_axes={
+            "pixel_values": {0: "batch"},
+            "pixel_mask": {0: "batch"},
+            "logits": {0: "batch"},
+            "pred_boxes": {0: "batch"},
+        },
+        opset_version=17,
+    )
+
+    slimmed = slim(onnx_path)
+    onnx.save(slimmed, onnx_path)
+
+    size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
+    print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
+
+
+def _remove_checkpoints(output_dir):
+    """Delete all checkpoint-* directories, keeping only the final model."""
+    for item in Path(output_dir).iterdir():
+        if item.is_dir() and item.name.startswith("checkpoint-"):
+            shutil.rmtree(item)
+
+
+def _print_summary(metrics, id2label):
+    """Print a formatted evaluation summary."""
+    print("\n=== Evaluation Results ===")
+    print(f"  {'mAP':<16} {metrics.get('map', 0):.4f}")
+    print(f"  {'mAP@50':<16} {metrics.get('map_50', 0):.4f}")
+    print(f"  {'mAP@75':<16} {metrics.get('map_75', 0):.4f}")
+    print(f"  {'mAR@100':<16} {metrics.get('mar_100', 0):.4f}")
+
+    has_size = any(f"map_{s}" in metrics for s in ("small", "medium", "large"))
+    if has_size:
+        print()
+        for size in ("small", "medium", "large"):
+            m = metrics.get(f"map_{size}", -1)
+            r = metrics.get(f"mar_100_{size}", -1)
+            if m >= 0:
+                line = f"  {size:<16} mAP: {m:.4f}"
+                if r >= 0:
+                    line += f"  mAR: {r:.4f}"
+                print(line)
+
+    class_names = [n for n in id2label.values() if f"map_{n}" in metrics]
+    if class_names:
+        print(f"\n  {'Class':<20} {'mAP':>8} {'mAR@100':>8}")
+        print(f"  {'─' * 38}")
+        for name in sorted(class_names):
+            m = metrics.get(f"map_{name}", -1)
+            r = metrics.get(f"mar_100_{name}", -1)
+            print(f"  {name:<20} {m:>8.4f} {r:>8.4f}")
+
+
 class HFDetModel(Model):
-    model_class = None
+    name = "hf"
 
     def filter(self, config, output_dir):
         filter_coco_dataset(config, output_dir)
@@ -31,6 +116,8 @@ class HFDetModel(Model):
     def train(self, config, train_stats):
         model_cfg = config["model"]
         train_cfg = config["training"]
+        output_dir = train_cfg["output_dir"]
+        image_size = train_cfg["image_size"]
         Path(train_cfg["tensorboard_dir"]).mkdir(parents=True, exist_ok=True)
 
         image_processor, train_dataset, val_dataset = build_datasets(config)
@@ -39,7 +126,7 @@ class HFDetModel(Model):
         id2label = {i: name for i, (_, name) in enumerate(sorted(categories.items()))}
         label2id = {name: i for i, name in id2label.items()}
 
-        model = self.model_class.from_pretrained(
+        model = AutoModelForObjectDetection.from_pretrained(
             model_cfg["name"],
             id2label=id2label,
             label2id=label2id,
@@ -47,9 +134,6 @@ class HFDetModel(Model):
         )
 
         def collate_fn(batch):
-            # transformers v5 replaced batch pad() with a per-image API; our
-            # forced square resize already yields uniform sizes, so stack them
-            # and hand the model an all-ones mask (no pixels are padded).
             pixel_values = torch.stack([item["pixel_values"] for item in batch])
             pixel_mask = torch.ones(
                 pixel_values.shape[0],
@@ -64,39 +148,31 @@ class HFDetModel(Model):
                 "labels": [item["labels"] for item in batch],
             }
 
-        # Prefer bf16 on capable GPUs (more stable for transformers than fp16).
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-        early_stopping_patience = train_cfg.get("early_stopping_patience", 0)
+        gc_requested = train_cfg.get("gradient_checkpointing", False)
+        gc_supported = getattr(model, "supports_gradient_checkpointing", False)
 
-        # transformers v5 dropped TrainingArguments.logging_dir; TensorBoard now
-        # reads TENSORBOARD_LOGGING_DIR, so point it at our shared tb root.
         os.environ["TENSORBOARD_LOGGING_DIR"] = train_cfg["tensorboard_dir"]
 
-        # transformers v5 raises for models without gradient-checkpointing
-        # support (RF-DETR, D-FINE) — honour the config only when supported.
-        gc_requested = train_cfg.get("gradient_checkpointing", False)
-        gc_supported = getattr(self.model_class, "supports_gradient_checkpointing", False)
-        if gc_requested and not gc_supported:
-            print(f"  note: {self.name} has no gradient checkpointing support; continuing without it")
-
         args = TrainingArguments(
-            output_dir=train_cfg["output_dir"],
+            output_dir=output_dir,
             report_to=["tensorboard"],
             num_train_epochs=train_cfg["epochs"],
             per_device_train_batch_size=train_cfg["batch_size"],
             per_device_eval_batch_size=train_cfg["batch_size"],
             learning_rate=float(train_cfg["learning_rate"]),
             weight_decay=float(train_cfg["weight_decay"]),
-            gradient_accumulation_steps=train_cfg.get("gradient_accumulation_steps", 1),
-            # v5 folded warmup_ratio into warmup_steps: a value < 1 is treated
-            # as a fraction of total training steps, so config semantics hold.
+            gradient_accumulation_steps=train_cfg.get(
+                "gradient_accumulation_steps", 1
+            ),
             warmup_steps=train_cfg.get("warmup_ratio", 0.0),
             lr_scheduler_type=train_cfg.get("lr_scheduler_type", "linear"),
             max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
             optim=train_cfg.get("optimizer", "adamw_torch"),
             dataloader_num_workers=train_cfg["num_workers"],
+            dataloader_persistent_workers=train_cfg["num_workers"] > 0,
             logging_steps=train_cfg["logging_steps"],
-            save_total_limit=train_cfg["save_total_limit"],
+            save_total_limit=train_cfg.get("save_total_limit", 1),
             seed=train_cfg["seed"],
             data_seed=train_cfg["seed"],
             full_determinism=train_cfg.get("deterministic", False),
@@ -107,12 +183,6 @@ class HFDetModel(Model):
             fp16=torch.cuda.is_available() and not use_bf16,
             gradient_checkpointing=gc_requested and gc_supported,
             gradient_checkpointing_kwargs={"use_reentrant": False},
-            # Trainer._load_best_model() reloads the best checkpoint with a raw
-            # load_state_dict(), but transformers v5 saves checkpoints in the
-            # model's original weight layout (revert_weight_conversion) — the
-            # key conversion never happens and the best weights silently fail
-            # to load. We reload the best checkpoint ourselves after training
-            # via from_pretrained, which applies the conversion.
             load_best_model_at_end=False,
             metric_for_best_model="map",
             greater_is_better=True,
@@ -137,11 +207,12 @@ class HFDetModel(Model):
             SampleGridCallback(
                 image_processor=image_processor,
                 val_dataset=val_dataset,
-                output_dir=train_cfg["output_dir"],
+                output_dir=output_dir,
                 logging_dir=train_cfg["tensorboard_dir"],
                 id2label=id2label,
             )
         )
+        early_stopping_patience = train_cfg.get("early_stopping_patience", 0)
         if early_stopping_patience > 0:
             trainer.add_callback(
                 EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
@@ -151,24 +222,30 @@ class HFDetModel(Model):
         print(f"  TensorBoard: tensorboard --logdir {train_cfg['tensorboard_dir']}")
         trainer.train()
 
-        # Reload the best checkpoint ourselves: from_pretrained applies the
-        # weight-layout conversion that Trainer._load_best_model skips (see
-        # the TrainingArguments comment above). Without this, the final model
-        # would keep the last epoch's weights instead of the best epoch's.
-        best_checkpoint = trainer.state.best_model_checkpoint
-        if best_checkpoint and os.path.isfile(
-            os.path.join(best_checkpoint, "model.safetensors")
+        # Reload the best checkpoint — from_pretrained applies the weight-layout
+        # conversion that Trainer._load_best_model skips in transformers v5.
+        best_ckpt = trainer.state.best_model_checkpoint
+        if best_ckpt and os.path.isfile(
+            os.path.join(best_ckpt, "model.safetensors")
         ):
-            best_model = self.model_class.from_pretrained(best_checkpoint)
+            best_model = AutoModelForObjectDetection.from_pretrained(best_ckpt)
             trainer.accelerator.unwrap_model(trainer.model).load_state_dict(
                 best_model.state_dict()
             )
             del best_model
-            print(f"  reloaded best checkpoint: {best_checkpoint}")
+            print(f"  best checkpoint: {best_ckpt}")
 
-        trainer.save_model(train_cfg["output_dir"])
-        image_processor.save_pretrained(train_cfg["output_dir"])
-        print(f"  model saved to {train_cfg['output_dir']}")
+        trainer.save_model(output_dir)
+        image_processor.save_pretrained(output_dir)
+
+        _export_onnx(
+            trainer.accelerator.unwrap_model(trainer.model), output_dir, image_size
+        )
+        _remove_checkpoints(output_dir)
+        print(f"  model saved to {output_dir}")
 
         metrics = trainer.evaluate()
-        return {key[len("eval_") :]: value for key, value in metrics.items()}
+        metrics = {key.removeprefix("eval_"): value for key, value in metrics.items()}
+        _print_summary(metrics, id2label)
+
+        return metrics

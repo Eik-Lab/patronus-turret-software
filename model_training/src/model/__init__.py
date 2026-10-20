@@ -1,9 +1,14 @@
-from src.model.hf_models import DeformableDetr, Detr, DFine, RfDetr, RtDetr
+from src.model.base import HFDetModel
 from src.model.yolo import Yolo
 
+_HF = HFDetModel()
+_YOLO = Yolo()
+
 MODEL_FORMATS = {
-    fmt.name: fmt
-    for fmt in [DFine(), Detr(), RtDetr(), DeformableDetr(), RfDetr(), Yolo()]
+    "rfdetr": _HF,
+    "dfine": _HF,
+    "hf": _HF,
+    "yolo": _YOLO,
 }
 
 

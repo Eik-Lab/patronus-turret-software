@@ -1,8 +1,8 @@
 from transformers import AutoImageProcessor
 
 from augment import build_train_transform
+from config import resolve
 from src.data.coco import CocoDetectionDataset
-from stats import resolve
 
 
 def build_datasets(config):

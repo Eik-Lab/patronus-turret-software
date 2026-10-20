@@ -2,33 +2,22 @@
 """
 Patronus — COCO dataset stats orchestrator.
 
-Runs every stat registered in data/ALL_STATS over the splits named in a
+Runs every stat registered in dataset/ALL_STATS over the splits named in a
 training config. Run standalone to inspect a dataset before training:
 
-  python stats.py --config train_configs/dfine.yaml
+  python stats.py --config train_configs/rf_detr.yaml
 """
 
 import argparse
 import json
 import os
 
-import yaml
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
+from config import load_config, resolve
 from dataset import ALL_STATS
-
-
-def load_config(path):
-    with open(path, "r") as f:
-        config = yaml.safe_load(f)
-    for section in ("dataset", "model", "training"):
-        if section not in config:
-            raise ValueError(f"config '{path}' is missing the '{section}' section")
-    return config
-
-
-def resolve(root, relative):
-    """Join a dataset-relative path onto the dataset root."""
-    return os.path.join(root, relative)
 
 
 def run_stats(annotations_path, split_name):
@@ -50,10 +39,6 @@ def run_stats(annotations_path, split_name):
 
 def save_plots(combined, output_dir, split_name):
     """Render every stat's plot into <output_dir>/stats/<split>_<stat>.png."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     stats_dir = os.path.join(output_dir, "stats")
     os.makedirs(stats_dir, exist_ok=True)
 

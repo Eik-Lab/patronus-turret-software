@@ -1,5 +1,5 @@
-import glob
 import os
+from pathlib import Path
 
 from ultralytics import YOLO
 
@@ -19,8 +19,9 @@ class Yolo(Model):
         model_cfg = config["model"]
         train_cfg = config["training"]
 
-        # Ultralytics trains from a YOLO-txt dataset described by a data.yaml.
-        data_yaml = ds_cfg.get("data_yaml") or os.path.join(ds_cfg["root"], "data.yaml")
+        data_yaml = ds_cfg.get("data_yaml") or os.path.join(
+            ds_cfg["root"], "data.yaml"
+        )
         architecture = model_cfg.get("architecture")
         weights = model_cfg.get("name")
         if architecture:
@@ -30,10 +31,6 @@ class Yolo(Model):
         else:
             model = YOLO(weights)
 
-        # Ultralytics ties its TensorBoard writer to the run's save_dir, so we
-        # point the whole run at training.tensorboard_dir. That keeps YOLO runs
-        # under the same shared TensorBoard root as the HF experiments, letting
-        # one `tensorboard --logdir` overlay and compare every model.
         tb_dir = train_cfg.get("tensorboard_dir") or os.path.join(
             train_cfg["output_dir"], "train"
         )
@@ -60,19 +57,32 @@ class Yolo(Model):
             project=project,
             name=name,
             exist_ok=True,
-            save_period=1,  # checkpoint every epoch
         )
 
-        weights_dir = os.path.join(model.trainer.save_dir, "weights")
-        for pt in sorted(glob.glob(os.path.join(weights_dir, "*.pt"))):
-            YOLO(pt).export(format="onnx", imgsz=train_cfg["image_size"])
-            os.remove(pt)
-        print(f"  ONNX models saved to {weights_dir}")
+        # Export only best.pt to ONNX, then remove all .pt files.
+        weights_dir = Path(model.trainer.save_dir) / "weights"
+        best_pt = weights_dir / "best.pt"
+        if best_pt.is_file():
+            YOLO(str(best_pt)).export(format="onnx", imgsz=train_cfg["image_size"])
+        for pt in weights_dir.glob("*.pt"):
+            pt.unlink()
 
-        # Normalise Ultralytics' metric keys to match the HF experiments.
+        onnx_path = weights_dir / "best.onnx"
+        if onnx_path.is_file():
+            size_mb = onnx_path.stat().st_size / (1024 * 1024)
+            print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
+
         rd = getattr(results, "results_dict", {})
-        return {
+        metrics = {
             "map": rd.get("metrics/mAP50-95(B)"),
             "map_50": rd.get("metrics/mAP50(B)"),
-            "map_75": rd.get("metrics/mAP75(B)"),
+            "precision": rd.get("metrics/precision(B)"),
+            "recall": rd.get("metrics/recall(B)"),
         }
+
+        print("\n=== Evaluation Results ===")
+        for label, value in metrics.items():
+            if value is not None:
+                print(f"  {label:<16} {value:.4f}")
+
+        return metrics

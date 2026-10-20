@@ -1,4 +1,7 @@
 from collections import Counter
+
+from palette import SEQUENCE
+
 from .base import Stat
 
 
@@ -18,7 +21,7 @@ class ClassDistribution(Stat):
         print("  class distribution:")
         for name, count in Counter(per_class).most_common():
             share = 100.0 * count / total if total else 0.0
-            print(f"{str(name):<20} {count:>8}  ({share:5.1f}%)")
+            print(f"    {str(name):<18} {count:>8}  ({share:5.1f}%)")
 
     def plot(self, result, ax):
         per_class = result["per_class"]
@@ -27,7 +30,8 @@ class ClassDistribution(Stat):
         items = sorted(per_class.items(), key=lambda kv: kv[1], reverse=True)
         names = [str(name) for name, _ in items]
         counts = [count for _, count in items]
-        ax.bar(names, counts, color="#55A868")
+        colors = [SEQUENCE[i % len(SEQUENCE)] for i in range(len(names))]
+        ax.bar(names, counts, color=colors)
         ax.set_ylabel("annotations")
         ax.tick_params(axis="x", rotation=45)
         return True

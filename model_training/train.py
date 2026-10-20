@@ -3,8 +3,9 @@ import argparse
 import json
 from pathlib import Path
 
+from config import load_config
 from src.model import get_format
-from stats import explore_dataset, load_config
+from stats import explore_dataset
 
 
 def run(config, stats_only=False):

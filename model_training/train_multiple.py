@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from stats import load_config
+from config import load_config
 from train import run
 
 DEFAULT_CONFIGS = [
@@ -21,7 +21,7 @@ def main():
         "configs",
         nargs="*",
         default=DEFAULT_CONFIGS,
-        help="paths to YAML configs in train_configs/ (default: rf-detr large, D-FINE medium, YOLOv8-P2)",
+        help="paths to YAML configs in train_configs/ (default: rf-detr large, rf-detr medium, D-FINE medium)",
     )
     parser.add_argument(
         "--runs-dir",

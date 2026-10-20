@@ -9,6 +9,7 @@ model:
 
 training:
   output_dir: ./runs/yolov8_p2
+  tensorboard_dir: ./runs/yolov8_p2/tb
   epochs: 100
   batch_size: 16
   learning_rate: 1.0e-3
@@ -17,7 +18,6 @@ training:
   momentum: 0.937
   warmup_epochs: 3.0
   optimizer: auto
-  cos_lr: false
   image_size: 640
   num_workers: 8
   seed: 42

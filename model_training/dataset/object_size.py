@@ -1,12 +1,10 @@
 from collections import Counter
-
 from palette import EIK_30, EIK_50, EIK_80
-
 from .base import Stat
 
 # Object area as a percentage of the image area.
-SMALL_MAX_PCT = 3.0
-MEDIUM_MAX_PCT = 12.0
+SMALL_MAX_PCT = 0.5
+MEDIUM_MAX_PCT = 3.0
 
 
 class ObjectSize(Stat):
