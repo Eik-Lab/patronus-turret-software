@@ -81,6 +81,9 @@ struct MotorHandle {
     bool  calibrated = false;
     float min_pos = std::numeric_limits<float>::lowest();
     float max_pos = std::numeric_limits<float>::max();
+
+    // Which limit the software stop is holding at: +1 = upper, -1 = lower, 0 = none
+    int blocked = 0;
 };
 
 struct MotorInit {
@@ -251,8 +254,8 @@ void boot_sequence(MotorInit& init) {
     }
 
     // Calibrate motors (temp values): group, kp, kd, max torque, software-limit margin from barrier (rad)
-    calibrate(pan_motors, 10, 0.5, 2, 0.3f);
-    calibrate(tilt_motors, 1, 1, 1, 0.3f);
+    calibrate(pan_motors, 10, 0.5, 5, 0.3f);
+    calibrate(tilt_motors, 10, 0.5, 2, 0.3f);
 }
 
 // Set speed
@@ -283,7 +286,7 @@ std::mutex targets_mutex;        // Protects 'targets'
 std::atomic<bool> running{true}; // Set to false to stop the control thread
 
 // Software stop: take the requested speeds and zero any that would push a motor past its limit.
-// Moving back away from a limit is always allowed.
+// Moving back away from a limit is always allowed (the hold is released by asking for zero or the other way).
 std::vector<float> limit_speeds(MotorInit& init, const std::vector<float>& requested) {
     std::vector<float> allowed = requested;
 
@@ -302,9 +305,28 @@ std::vector<float> limit_speeds(MotorInit& init, const std::vector<float>& reque
             continue;
         }
 
-        // Positive speed is assumed to increase position. Check with a small speed first!
-        if (allowed[i] > 0.0f && pos.first >= m.max_pos) allowed[i] = 0.0f;
-        if (allowed[i] < 0.0f && pos.first <= m.min_pos) allowed[i] = 0.0f;
+        float v = requested[i];
+
+        // The hold on a limit is released once the user asks for zero or the other direction
+        if (m.blocked == +1 && v <= 0.0f) m.blocked = 0;
+        if (m.blocked == -1 && v >= 0.0f) m.blocked = 0;
+
+        // Reaching a limit LATCHES that direction. Without the latch, the position jitters
+        // around the limit, the speed flips between 0 and the requested value every
+        // 10 ms, and the motor shakes. Positive speed is assumed to increase position.
+        if (v > 0.0f && pos.first >= m.max_pos && m.blocked == 0) {
+            m.blocked = +1;
+            std::cout << "Motor " << m.gains.id << " reached its upper limit" << std::endl;
+        }
+        if (v < 0.0f && pos.first <= m.min_pos && m.blocked == 0) {
+            m.blocked = -1;
+            std::cout << "Motor " << m.gains.id << " reached its lower limit" << std::endl;
+        }
+
+        if (m.blocked == +1 && v > 0.0f) v = 0.0f;
+        if (m.blocked == -1 && v < 0.0f) v = 0.0f;
+
+        allowed[i] = v;
     }
 
     return allowed;
