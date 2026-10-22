@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
+import torch
 import yaml
 
 from src.config import load_config
@@ -10,7 +11,17 @@ from src.model import get_format
 from src.stats import explore_dataset
 
 
+def require_gpu():
+    """Abort unless PyTorch can see a CUDA GPU."""
+    if not torch.cuda.is_available():
+        raise SystemExit(
+            "error: no CUDA GPU visible to PyTorch (torch.cuda.is_available() is False); "
+            "training requires a GPU."
+        )
+
+
 def run(config):
+    require_gpu()
     output_dir = config["training"]["output_dir"]
     model_format = get_format(config["model"]["type"])
     Path(output_dir).mkdir(parents=True, exist_ok=True)

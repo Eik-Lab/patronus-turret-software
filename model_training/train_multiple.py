@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from src.config import load_config
-from train import run
+from train import require_gpu, run
 
 DEFAULT_CONFIGS = [
     "train_configs/yolov8_p2.yaml",
@@ -29,6 +29,9 @@ def main():
         help="parent directory for all experiment outputs",
     )
     cli_args = parser.parse_args()
+
+    # fail once up front instead of once per experiment
+    require_gpu()
 
     # Each config becomes an experiment named after its file (e.g. dfine_large).
     # Artifacts (checkpoints, stats, samples) go under <runs-dir>/<name>, while

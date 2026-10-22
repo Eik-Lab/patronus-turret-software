@@ -11,7 +11,7 @@ model:
 
 training:
   output_dir: ./runs/rf_detr
-  tensorboard_dir: ./runs/rf_detr/tb
+  tensorboard_dir: ./runs/tensorboard/rf_detr
   epochs: 25
   batch_size: 8
   learning_rate: 1.0e-4

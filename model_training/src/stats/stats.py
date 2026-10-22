@@ -12,8 +12,21 @@ import matplotlib.pyplot as plt
 import yaml
 
 from src.config import load_config, resolve
-from src.stats import ALL_STATS
+from src.stats.aspect_ratio import AspectRatio
+from src.stats.bbox_area import BboxArea
+from src.stats.class_distribution import ClassDistribution
+from src.stats.object_size import ObjectSize
+from src.stats.overview import Overview
 from src.data.yolo_loader import yolo_split_to_coco
+
+
+ALL_STATS = [
+    Overview(),
+    ClassDistribution(),
+    ObjectSize(),
+    AspectRatio(),
+    BboxArea(),
+]
 
 
 def _load_coco_split(annotations_path):

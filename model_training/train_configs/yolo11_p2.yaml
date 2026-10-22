@@ -9,7 +9,7 @@ model:
 
 training:
   output_dir: ./runs/yolo11_p2
-  tensorboard_dir: ./runs/yolo11_p2/tb
+  tensorboard_dir: ./runs/tensorboard/yolo11_p2
   epochs: 100
   batch_size: 16
   learning_rate: 1.0e-4

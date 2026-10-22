@@ -11,7 +11,7 @@ model:
 
 training:
   output_dir: ./runs/rf_detr_large
-  tensorboard_dir: ./runs/rf_detr_large/tb
+  tensorboard_dir: ./runs/tensorboard/rf_detr_large
   epochs: 25
   batch_size: 2
   gradient_accumulation_steps: 4

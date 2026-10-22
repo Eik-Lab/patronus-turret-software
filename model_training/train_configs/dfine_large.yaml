@@ -11,7 +11,7 @@ model:
 
 training:
   output_dir: ./runs/dfine_large
-  tensorboard_dir: ./runs/dfine_large/tb
+  tensorboard_dir: ./runs/tensorboard/dfine_large
   epochs: 25
   batch_size: 4
   gradient_accumulation_steps: 2
