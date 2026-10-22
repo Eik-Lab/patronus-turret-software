@@ -167,6 +167,13 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
     cfg.kp_ = 0.006F;
   cfg.kd_ = read_float(kf, group, "kd", 0.0F);
   cfg.lead_gain_ = read_float(kf, group, "lead_gain", 0.0F);
+
+  cfg.source_camera_ = read_string(kf, group, "source_camera", "mono");
+  if (cfg.source_camera_ != "rgb" && cfg.source_camera_ != "mono") {
+    LOG(Warning, "[", group, "] source_camera '", cfg.source_camera_,
+        "' is not rgb or mono — using mono");
+    cfg.source_camera_ = "mono";
+  }
   return cfg;
 }
 
