@@ -39,12 +39,17 @@ using patronus::config::SystemConfig;
 static patronus::core::LatestValue<patronus::core::FrameObservation> detection_rgb;
 static patronus::core::LatestValue<patronus::core::FrameObservation> detection_mono;
 
-// One channel per camera. The tracking threads for the gimbals that read a
-// given camera publish into that camera's channel, and that camera's OSD probe
-// draws them. Keeping them separate is what lets the round-robin in the loop
-// below hand out gimbals without two threads fighting over one slot.
+// One channel per camera. Every tracking thread reading a given camera
+// publishes into that camera's channel, and that camera's OSD probe draws the
+// newest prediction of every gimbal that published to it.
 static patronus::tracking::PredictionChannel predictions_rgb;
 static patronus::tracking::PredictionChannel predictions_mono;
+
+// Gimbal index whose axes carry the cameras. Camera motion — not a pointer
+// gimbal's own slew — is what moves the image, so every tracking thread
+// compensates its filter with this gimbal's encoders, whatever gimbal it
+// drives.
+constexpr size_t k_camera_gimbal = 0;
 
 int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
@@ -176,18 +181,23 @@ int main(int argc, char *argv[]) {
       const auto trk = cfg.tracking_cfg_[g];
       const auto gimbal_cfg = cfg.gimbals_[g];
 
-      // Round-robin across cameras; when only one pipeline is active, every
-      // gimbal reads from it. The pipeline a gimbal reads from is also the
-      // one whose geometry and focal lengths its filter must use, so select
-      // it once here and capture it by value.
-      const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
-      const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
-      auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
+      // Every gimbal aims from the camera its config selects. The pipeline a
+      // gimbal reads from is also the one whose geometry and focal lengths its
+      // filter must use, so select it once here and capture it by value. A
+      // gimbal whose source camera is not running has nothing to aim with:
+      // skip it rather than spin up a thread that starves forever.
+      const bool source_rgb = trk.source_camera_ == "rgb";
+      if (source_rgb ? !rgb_active : !mono_active) {
+        LOG(Warning, "Gimbal " << g << ": source_camera '" << trk.source_camera_
+                               << "' is not running — this gimbal will not track");
+        continue;
+      }
+      const auto pipe = source_rgb ? cfg.rgb_ : cfg.mono_;
+      auto *det = source_rgb ? &detection_rgb : &detection_mono;
+      auto *predictions = source_rgb ? &predictions_rgb : &predictions_mono;
 
-      tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, use_rgb,
-                                     rgb_active, mono_active, predictions]() {
-        auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
-                                                : (use_rgb ? &detection_rgb : &detection_mono);
+      tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, det,
+                                     predictions]() {
 
         patronus::tracking::TargetFilter filter(trk, pipe.detection_width_, pipe.detection_height_,
                                                 pipe.focal_x_px_, pipe.focal_y_px_);
@@ -247,7 +257,11 @@ int main(int argc, char *argv[]) {
           // pose that was current when a frame was captured. Without a motor
           // there is no pose to record, and camera motion goes uncompensated.
           if (driving) {
-            const auto pos = motor->get_position(g);
+            // The camera carrier's pose, not this gimbal's: camera motion is
+            // what moves the image the filter stabilises against. A pointer
+            // gimbal slewing produces no image motion at all, so compensating
+            // with its own encoders would inject fake target motion.
+            const auto pos = motor->get_position(k_camera_gimbal);
             filter.push_gimbal_sample(t_s, pos.first, pos.second);
           }
 

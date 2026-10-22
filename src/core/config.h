@@ -87,6 +87,13 @@ struct TrackingConfig {
   float kp_{0.006f};      ///< Proportional gain (per pixel of error).
   float kd_{0.0f};        ///< Derivative gain on filtered velocity.
   float lead_gain_{0.0f}; ///< Lead term on filtered velocity (s).
+
+  /// Camera whose detections this gimbal aims from: "rgb" or "mono".
+  ///
+  /// Gimbals that do not carry cameras (e.g. a pointer) read from and are
+  /// compensated against the camera-carrying gimbal's encoders, so both gimbal
+  /// types usually share the same source.
+  std::string source_camera_{"mono"};
 };
 
 /// @brief Shared CAN bus settings (apply to all gimbals on the bus).
