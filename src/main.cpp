@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <memory>
 #include <optional>
@@ -163,7 +164,23 @@ int main(int argc, char *argv[]) {
       cfg.tracking_ ? motor : nullptr;
     const size_t gimbal_count = drive_motor ? drive_motor->gimbal_count() : cfg.gimbals_.size();
 
+    // Gimbals that carry a camera get a tracking thread. The others (follow=N
+    // in [can_N]) see nothing themselves: the thread of the gimbal they follow
+    // drives them to the target bearing its camera reports.
+    std::vector<size_t> leaders;
+    std::vector<std::vector<size_t>> followers(gimbal_count);
     for (size_t g = 0; g < gimbal_count; ++g) {
+      if (cfg.gimbals_[g].follow_ == 0) {
+        leaders.push_back(g);
+      } else {
+        followers[cfg.gimbals_[g].follow_ - 1U].push_back(g);
+        LOG(Info,
+            "Gimbal " << g << " follows gimbal " << (cfg.gimbals_[g].follow_ - 1U) << "'s camera");
+      }
+    }
+
+    for (size_t k = 0; k < leaders.size(); ++k) {
+      const size_t g = leaders[k];
       if (drive_motor) {
         LOG(Info, "Tracking gimbal " << g << " started (max " << cfg.gimbals_[g].max_velocity_rad_s_
                                      << " rad/s, tilt limit ±" << cfg.gimbals_[g].tilt_max_rad_
@@ -176,18 +193,19 @@ int main(int argc, char *argv[]) {
       const auto trk = cfg.tracking_cfg_[g];
       const auto gimbal_cfg = cfg.gimbals_[g];
 
-      // Round-robin across cameras; when only one pipeline is active, every
-      // gimbal reads from it. The pipeline a gimbal reads from is also the
-      // one whose geometry and focal lengths its filter must use, so select
-      // it once here and capture it by value.
-      const bool use_rgb = (rgb_active && mono_active) ? (g % 2 == 0) : rgb_active;
+      // Round-robin across cameras among the gimbals that carry one; when only
+      // one pipeline is active, every such gimbal reads from it. The pipeline
+      // a gimbal reads from is also the one whose geometry and focal lengths
+      // its filter must use, so select it once here and capture it by value.
+      const bool use_rgb = (rgb_active && mono_active) ? (k % 2 == 0) : rgb_active;
       const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
       auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
+      const std::vector<size_t> follower_ids = followers[g];
+      const auto all_gimbals = cfg.gimbals_;
 
       tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, use_rgb,
-                                     rgb_active, mono_active, predictions]() {
-        auto *det = (rgb_active && mono_active) ? (g % 2 == 0 ? &detection_rgb : &detection_mono)
-                                                : (use_rgb ? &detection_rgb : &detection_mono);
+                                     predictions, follower_ids, all_gimbals]() {
+        auto *det = use_rgb ? &detection_rgb : &detection_mono;
 
         patronus::tracking::TargetFilter filter(trk, pipe.detection_width_, pipe.detection_height_,
                                                 pipe.focal_x_px_, pipe.focal_y_px_);
@@ -206,6 +224,48 @@ int main(int argc, char *argv[]) {
                             "compensated, so the filter will read the gimbal's own slew as target "
                             "motion. Set these from the camera's lens and sensor specs.");
         }
+
+        // Followers are aimed by bearing: this gimbal's pose plus the target's
+        // angle off the optical axis, which takes the focal lengths. Bearings
+        // are taken relative to each gimbal's home, so the two homes must
+        // point the same way up to [can_N] pan/tilt_offset_rad.
+        const bool lead_followers =
+          driving && !follower_ids.empty() && pipe.focal_x_px_ > 0.0F && pipe.focal_y_px_ > 0.0F;
+        if (driving && !follower_ids.empty() && !lead_followers) {
+          LOG(Warning, "Tracking gimbal " << g
+                                          << ": no focal length set, so its followers cannot be "
+                                             "aimed — they stay at home");
+        }
+        const auto home = driving ? motor->home_position(g) : std::pair<float, float>{0.0F, 0.0F};
+        std::pair<float, float> pose{0.0F, 0.0F};
+
+        const auto aim_followers = [&](patronus::core::Point error_px) {
+          if (!lead_followers)
+            return;
+          const float pan = pose.first - home.first + std::atan(error_px.cx_ / pipe.focal_x_px_);
+          const float tilt = pose.second - home.second + std::atan(error_px.cy_ / pipe.focal_y_px_);
+          for (const size_t f : follower_ids) {
+            const auto &fc = all_gimbals[f];
+            const auto [f_pan, f_tilt] = motor->home_position(f);
+            motor->drive_to(f, f_pan + fc.pan_offset_rad_ + pan,
+                            f_tilt + fc.tilt_offset_rad_ + tilt, fc.follow_gain_,
+                            trk.home_tolerance_rad_);
+          }
+        };
+
+        // Followers mirror this gimbal when it is not aiming: hold during the
+        // home-return delay, otherwise head home.
+        const auto park_followers = [&](bool hold) {
+          if (!driving)
+            return;
+          for (const size_t f : follower_ids) {
+            if (hold)
+              motor->set_velocity(f, 0.0F, 0.0F);
+            else
+              motor->return_to_home(f, trk.home_return_gain_, trk.home_tolerance_rad_,
+                                    trk.home_return_max_velocity_);
+          }
+        };
 
         // HOT PATH: ~100 Hz loop. No heap allocs, no blocking I/O, no
         // logging per frame.
@@ -247,8 +307,8 @@ int main(int argc, char *argv[]) {
           // pose that was current when a frame was captured. Without a motor
           // there is no pose to record, and camera motion goes uncompensated.
           if (driving) {
-            const auto pos = motor->get_position(g);
-            filter.push_gimbal_sample(t_s, pos.first, pos.second);
+            pose = motor->get_position(g);
+            filter.push_gimbal_sample(t_s, pose.first, pose.second);
           }
 
           // One observation per camera frame, with or without a detection.
@@ -303,6 +363,7 @@ int main(int argc, char *argv[]) {
             if (aiming && driving) {
               motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
                                   cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+              aim_followers(est->lead_error());
             }
           } else if (opt.has_value() && opt->detection_.has_value() && driving) {
             // Filter disabled: drive straight off the raw detection.
@@ -315,6 +376,7 @@ int main(int argc, char *argv[]) {
               error, patronus::core::Point{0.0F, 0.0F}, gains);
             motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
                                 raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+            aim_followers(error);
             aiming = true;
           }
 
@@ -331,6 +393,8 @@ int main(int argc, char *argv[]) {
           if (opt.has_value() && opt->detection_.has_value() && state == State::ReturningHome) {
             state = State::Tracking;
           }
+
+          park_followers(state == State::Tracking);
 
           if (state == State::ReturningHome) {
             if (motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
@@ -353,8 +417,11 @@ int main(int argc, char *argv[]) {
 
         // Never leave a gimbal commanded on thread exit, and stop drawing a
         // prediction nothing is maintaining any more.
-        if (driving)
+        if (driving) {
           motor->set_velocity(g, 0.0F, 0.0F);
+          for (const size_t f : follower_ids)
+            motor->set_velocity(f, 0.0F, 0.0F);
+        }
         predictions->clear(g);
       });
     }

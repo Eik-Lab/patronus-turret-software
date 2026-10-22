@@ -95,6 +95,22 @@ public:
   bool return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                       float max_velocity_rad_s = 0.0F);
 
+  /// @brief Drive a specific gimbal toward an encoder pose using velocity-mode
+  ///        P-control. Software limits still apply.
+  /// @param pan_rad            Pan target, encoder radians.
+  /// @param tilt_rad           Tilt target, encoder radians.
+  /// @param position_gain      P-gain (rad/s per rad of position error).
+  /// @param tolerance_rad      Position deadband for "arrived".
+  /// @param max_velocity_rad_s Upper bound; 0 uses the gimbal's configured max.
+  /// @return true when the gimbal is within tolerance of the target.
+  bool drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                float tolerance_rad, float max_velocity_rad_s = 0.0F);
+
+  /// @brief Home pose of a specific gimbal: the centre of each calibrated
+  ///        axis's range, or 0 for an axis not calibrated this boot.
+  /// @return Pair of (pan_rad, tilt_rad).
+  std::pair<float, float> home_position(size_t gimbal) const;
+
   /// @brief Access raw pan MD for a specific gimbal (diagnostic use).
   /// @warning Calls on the returned MD bypass the bus lock; do not use while
   ///          tracking threads are running.
@@ -116,8 +132,8 @@ private:
   /// start of its calibration. Filled in by boot_sequence().
   struct SoftLimit {
     bool calibrated{false};
-    float min_pos{0.0F}; ///< Lower stop + backoff.
-    float max_pos{0.0F}; ///< Upper stop - backoff.
+    float min_pos{0.0F};  ///< Lower stop + backoff.
+    float max_pos{0.0F};  ///< Upper stop - backoff.
     float home_pos{0.0F}; ///< Centre of [min_pos, max_pos]; 0 until calibrated.
   };
 
@@ -125,8 +141,8 @@ private:
   /// physical barrier. Returns true and writes the stall position to
   /// barrier_pos. Caller must hold bus_mutex_ and have the axis in IMPEDANCE
   /// mode with suitable impedance params and torque limit.
-  bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step,
-                    float max_lead, float &barrier_pos);
+  bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step, float max_lead,
+                    float &barrier_pos);
 
   /// Find both barriers for one axis and store the soft limits. Caller must
   /// hold bus_mutex_.

@@ -122,6 +122,12 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.calibrate_on_boot_ = read_bool(kf, group, "calibrate_on_boot", false);
   cfg.pan_pid_ = read_pid(kf, group, "pan");
   cfg.tilt_pid_ = read_pid(kf, group, "tilt");
+  cfg.follow_ = read_uint<uint16_t>(kf, group, "follow", 0);
+  cfg.follow_gain_ = read_float(kf, group, "follow_gain", 5.0F);
+  if (cfg.follow_gain_ <= 0.0F)
+    cfg.follow_gain_ = 5.0F;
+  cfg.pan_offset_rad_ = read_float(kf, group, "pan_offset_rad", 0.0F);
+  cfg.tilt_offset_rad_ = read_float(kf, group, "tilt_offset_rad", 0.0F);
   return cfg;
 }
 
@@ -263,6 +269,21 @@ SystemConfig load_config(const std::string &path) {
       sys.tracking_cfg_.push_back(read_tracking(kf, "tracking"));
     else
       sys.tracking_cfg_.push_back(TrackingConfig{});
+  }
+
+  // A follower must name another gimbal that tracks from its own camera;
+  // chains and self-references would leave nothing to follow.
+  for (size_t g = 0; g < sys.gimbals_.size(); ++g) {
+    auto &gimbal = sys.gimbals_[g];
+    if (gimbal.follow_ == 0)
+      continue;
+    const size_t leader = gimbal.follow_ - 1U;
+    if (leader >= sys.gimbals_.size() || leader == g || sys.gimbals_[leader].follow_ != 0) {
+      LOG(Warning, "[can_" << (g + 1) << "] follow=" << gimbal.follow_
+                           << " does not name a gimbal that tracks from its own camera — "
+                              "ignoring it");
+      gimbal.follow_ = 0;
+    }
   }
 
   g_key_file_free(kf);
