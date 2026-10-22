@@ -69,14 +69,15 @@ public:
   ///        boot tool).
   ///
   /// For every gimbal with calibrate_on_boot_ set, each axis is zeroed at its
-  /// current pose (that pose then becomes home for return_to_home()), driven
-  /// into both physical end stops with a low-stiffness impedance controller,
-  /// and the recorded barrier positions are stored as software limits set
-  /// 'backoff' inside the barriers. The axis is parked mid-range, then put
-  /// back into its configured VELOCITY_PID mode and enabled, ready for the
-  /// tracking threads.
+  /// current pose, driven into both physical end stops with a low-stiffness
+  /// impedance controller, and the recorded barrier positions are stored as
+  /// software limits set 'backoff' inside the barriers. The centre of those
+  /// limits becomes home for return_to_home(). The axis is put back into its
+  /// configured VELOCITY_PID mode, enabled, and parked at the centre with a
+  /// closed position loop, ready for the tracking threads.
   ///
-  /// Blocking: up to ~30 s per axis while searching for a barrier. Called
+  /// Blocking: up to ~30 s per axis while searching for a barrier, plus up
+  /// to ~10 s to park. Called
   /// once after init(), before any tracking thread starts. Axes that fail
   /// calibration are disabled and left uncalibrated; velocity commands to
   /// uncalibrated axes are not position-limited (find_barrier() results are
@@ -85,6 +86,8 @@ public:
   [[nodiscard]] bool boot_sequence();
 
   /// @brief Drive a specific gimbal toward home using velocity-mode P-control.
+  ///        Home is the centre of each calibrated axis's range, or the start
+  ///        pose (0) for an axis not calibrated this boot.
   /// @param position_gain      P-gain (rad/s per rad of position error).
   /// @param tolerance_rad      Position deadband for "at home".
   /// @param max_velocity_rad_s Upper bound; 0 uses the gimbal's configured max.
@@ -115,6 +118,7 @@ private:
     bool calibrated{false};
     float min_pos{0.0F}; ///< Lower stop + backoff.
     float max_pos{0.0F}; ///< Upper stop - backoff.
+    float home_pos{0.0F}; ///< Centre of [min_pos, max_pos]; 0 until calibrated.
   };
 
   /// Drive one axis in one direction (+1 or -1) until it stalls against a
@@ -128,6 +132,11 @@ private:
   /// hold bus_mutex_.
   bool calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float kd, float torque,
                       float backoff, SoftLimit &limit);
+
+  /// Drive one axis to 'target' (rad) with a P+I position loop on top of its
+  /// VELOCITY_PID mode. Returns false if it never got within tolerance.
+  /// Caller must hold bus_mutex_ and have the axis enabled in VELOCITY_PID.
+  bool park_axis(mab::MD *md, uint16_t node_id, float target);
 
   /// Zero a velocity command that would push a calibrated axis past its
   /// software limit. Caller must hold bus_mutex_.
