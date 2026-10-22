@@ -146,6 +146,11 @@ int main(int argc, char *argv[]) {
     if (!motor->init()) {
       LOG(Error, "Failed to initialise CANdle motor driver — tracking disabled");
       motor.reset();
+    } else if (!motor->boot_sequence()) {
+      // Only runs axes whose [can_N] calibrate_on_boot is set. The pose those
+      // axes are parked in becomes their home, so place the gimbal(s) there
+      // before starting the program.
+      LOG(Warning, "Boot calibration failed for at least one axis — treat its limits as unknown");
     }
   }
 
