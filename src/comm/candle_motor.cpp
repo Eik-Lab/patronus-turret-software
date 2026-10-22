@@ -110,19 +110,31 @@ bool CandleMotor::init() {
     pan_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].pan_node_id_, candle_);
     tilt_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].tilt_node_id_, candle_);
 
-    // Shared velocity-PID settings for both axes
-    for (auto *md : {pan_motors_[g].get(), tilt_motors_[g].get()}) {
+    // Per-axis velocity-PID gains from the gimbal's config (system.ini)
+    auto setup_md = [&](mab::MD *md, const config::MotorPidConfig &pid) {
       if (md->init() != mab::MD::Error_t::OK) {
         LOG(Error, "CandleMotor: MD" << md->m_canId << " (gimbal " << g
                                      << ") did not respond — check node id");
-        disable();
         return false;
       }
 
       md->setMotionMode(mab::MdMode_E::VELOCITY_PID);
-      md->setVelocityPIDparam(2.0F, 0.1F, 0.0F, 0.5F);
+      md->setVelocityPIDparam(pid.kp_, pid.ki_, pid.kd_, pid.integral_max_);
       md->setMaxTorque(10.0F);
       md->enable();
+      LOG(Info, "CandleMotor: MD" << md->m_canId << " velocity PID (kp=" << pid.kp_
+                                  << " ki=" << pid.ki_ << " kd=" << pid.kd_
+                                  << " integral_max=" << pid.integral_max_ << ")");
+      return true;
+    };
+
+    if (!setup_md(pan_motors_[g].get(), gimbals_[g].pan_pid_)) {
+      disable();
+      return false;
+    }
+    if (!setup_md(tilt_motors_[g].get(), gimbals_[g].tilt_pid_)) {
+      disable();
+      return false;
     }
 
     LOG(Info, "CandleMotor: gimbal " << g << " — pan=MD" << pan_motors_[g]->m_canId << " tilt=MD"

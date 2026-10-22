@@ -5,6 +5,7 @@
 #include <glib.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -80,6 +81,33 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   return cfg;
 }
 
+static MotorPidConfig read_pid(GKeyFile *kf, const gchar *group, const gchar *axis) {
+  MotorPidConfig cfg;
+  char key[64];
+
+  std::snprintf(key, sizeof(key), "%s_kp", axis);
+  cfg.kp_ = read_float(kf, group, key, cfg.kp_);
+  if (cfg.kp_ < 0.0F)
+    cfg.kp_ = 0.0F;
+
+  std::snprintf(key, sizeof(key), "%s_ki", axis);
+  cfg.ki_ = read_float(kf, group, key, cfg.ki_);
+  if (cfg.ki_ < 0.0F)
+    cfg.ki_ = 0.0F;
+
+  std::snprintf(key, sizeof(key), "%s_kd", axis);
+  cfg.kd_ = read_float(kf, group, key, cfg.kd_);
+  if (cfg.kd_ < 0.0F)
+    cfg.kd_ = 0.0F;
+
+  std::snprintf(key, sizeof(key), "%s_integral_max", axis);
+  cfg.integral_max_ = read_float(kf, group, key, cfg.integral_max_);
+  if (cfg.integral_max_ < 0.0F)
+    cfg.integral_max_ = 0.0F;
+
+  return cfg;
+}
+
 static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallback_pan,
                                 uint16_t fallback_tilt) {
   GimbalConfig cfg;
@@ -91,6 +119,8 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.tilt_max_rad_ = read_float(kf, group, "tilt_max_rad", 0.611F);
   if (cfg.tilt_max_rad_ <= 0.0F)
     cfg.tilt_max_rad_ = 0.611F;
+  cfg.pan_pid_ = read_pid(kf, group, "pan");
+  cfg.tilt_pid_ = read_pid(kf, group, "tilt");
   return cfg;
 }
 
