@@ -33,12 +33,22 @@ struct PipelineConfig {
   float prediction_lead_s_{0.15f};
 };
 
+/// @brief Velocity-PID gains for one motor axis (VELOCITY_PID mode).
+struct MotorPidConfig {
+  float kp_{2.0f};           ///< Proportional gain.
+  float ki_{0.1f};           ///< Integral gain.
+  float kd_{0.0f};           ///< Derivative gain.
+  float integral_max_{0.5f}; ///< Integral term clamp.
+};
+
 /// @brief CAN bus configuration for a single gimbal.
 struct GimbalConfig {
   uint16_t pan_node_id_{16};        ///< CAN node ID for the pan motor.
   uint16_t tilt_node_id_{18};       ///< CAN node ID for the tilt motor.
   float max_velocity_rad_s_{6.28f}; ///< Maximum velocity command.
   float tilt_max_rad_{0.611f};      ///< Maximum tilt output angle (±rad).
+  MotorPidConfig pan_pid_;          ///< Velocity-PID gains for the pan motor.
+  MotorPidConfig tilt_pid_;         ///< Velocity-PID gains for the tilt motor.
 };
 
 /// @brief Tracking loop configuration for a single gimbal.
