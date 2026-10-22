@@ -217,7 +217,9 @@ struct TargetFilter::Impl {
     // image, i.e. with the camera shift at capture added back.
     const kalman::Rect at = tracker.roi(frame_pan_rad, frame_tilt_rad, 0.0F);
     const Eigen::Vector2f velocity = tracker.velocity();
-    const kalman::Tracker::Matrix6 &cov = tracker.covariance();
+    // Snapshot by value since kalman-cpp's packed core: dense storage is an
+    // output format, and the reference-binding idiom would hide the copy.
+    const auto cov = tracker.covariance();
 
     Estimate::Values v;
     v.time_s = last_time_s;

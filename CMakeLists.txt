@@ -57,7 +57,7 @@ set(CANDLE_BUILD_STATIC
 FetchContent_Declare(
   kalman_cpp
   GIT_REPOSITORY git@github.com:ioeftedal/kalman-cpp.git
-  GIT_TAG 05ec5881d3d516c6e0d1de8ebad4fdd28bdf936a
+  GIT_TAG d7c6fd2ce4b8b9b683c5c76ac8bb4ce5da4bcdef
   EXCLUDE_FROM_ALL)
 set(KALMAN_BUILD_TESTS
     OFF
