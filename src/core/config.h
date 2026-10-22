@@ -50,6 +50,10 @@ struct GimbalConfig {
   bool calibrate_on_boot_{false};   ///< Run axis barrier calibration in boot_sequence() at start.
   MotorPidConfig pan_pid_;          ///< Velocity-PID gains for the pan motor.
   MotorPidConfig tilt_pid_;         ///< Velocity-PID gains for the tilt motor.
+  float pan_velocity_scale_{1.0f};  ///< Multiplier on every pan velocity command.
+  float tilt_velocity_scale_{1.0f}; ///< Multiplier on every tilt velocity command.
+  float pan_max_velocity_rad_s_{6.28f};  ///< Pan command clamp after scaling (<= max_velocity).
+  float tilt_max_velocity_rad_s_{6.28f}; ///< Tilt command clamp after scaling (<= max_velocity).
 
   /// 1-based [can_N] index of the gimbal whose camera this one follows, or 0
   /// when it tracks from a camera of its own. A follower (e.g. a pointer on a
@@ -91,6 +95,9 @@ struct TrackingConfig {
 
   /// Age of a detection at the moment it reaches the tracking loop, in ms.
   int filter_pipeline_latency_ms_{20};
+  /// Longest capture-to-control extrapolation, ms. Caps how far ahead the
+  /// aim point is predicted, including while coasting between detections.
+  int filter_max_lead_ms_{250};
 
   // --- Control law -------------------------------------------------------
   float kp_{0.006f};      ///< Proportional gain (per pixel of error).

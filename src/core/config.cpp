@@ -122,6 +122,20 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.calibrate_on_boot_ = read_bool(kf, group, "calibrate_on_boot", false);
   cfg.pan_pid_ = read_pid(kf, group, "pan");
   cfg.tilt_pid_ = read_pid(kf, group, "tilt");
+  cfg.pan_velocity_scale_ = read_float(kf, group, "pan_velocity_scale", 1.0F);
+  if (cfg.pan_velocity_scale_ < 0.0F)
+    cfg.pan_velocity_scale_ = 1.0F;
+  cfg.tilt_velocity_scale_ = read_float(kf, group, "tilt_velocity_scale", 1.0F);
+  if (cfg.tilt_velocity_scale_ < 0.0F)
+    cfg.tilt_velocity_scale_ = 1.0F;
+  // Per-axis clamps can only tighten max_velocity_rad_s, never loosen it.
+  cfg.pan_max_velocity_rad_s_ = read_float(kf, group, "pan_max_velocity_rad_s", 0.0F);
+  if (cfg.pan_max_velocity_rad_s_ <= 0.0F || cfg.pan_max_velocity_rad_s_ > cfg.max_velocity_rad_s_)
+    cfg.pan_max_velocity_rad_s_ = cfg.max_velocity_rad_s_;
+  cfg.tilt_max_velocity_rad_s_ = read_float(kf, group, "tilt_max_velocity_rad_s", 0.0F);
+  if (cfg.tilt_max_velocity_rad_s_ <= 0.0F ||
+      cfg.tilt_max_velocity_rad_s_ > cfg.max_velocity_rad_s_)
+    cfg.tilt_max_velocity_rad_s_ = cfg.max_velocity_rad_s_;
   cfg.follow_ = read_uint<uint16_t>(kf, group, "follow", 0);
   cfg.follow_gain_ = read_float(kf, group, "follow_gain", 5.0F);
   if (cfg.follow_gain_ <= 0.0F)
@@ -162,6 +176,9 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
   cfg.filter_pipeline_latency_ms_ =
     static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms", 20));
   cfg.filter_pipeline_latency_ms_ = std::max(cfg.filter_pipeline_latency_ms_, 0);
+  cfg.filter_max_lead_ms_ =
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_lead_ms", 250));
+  cfg.filter_max_lead_ms_ = std::max(cfg.filter_max_lead_ms_, 0);
   cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
   if (cfg.filter_conf_noise_scale_ < 0.0F)
     cfg.filter_conf_noise_scale_ = 10.0F;

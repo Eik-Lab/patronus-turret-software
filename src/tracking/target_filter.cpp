@@ -18,10 +18,6 @@ namespace {
   /// pipeline must not inflate the covariance without limit in a single call.
   constexpr double k_max_step_s = 0.25;
 
-  /// Longest capture-to-control extrapolation, seconds. Beyond this the
-  /// constant-acceleration model is no longer a prediction worth steering by.
-  constexpr double k_max_lead_s = 0.25;
-
   constexpr float k_two_pi = 6.28318530717958647692F;
 
   struct GimbalSample {
@@ -41,6 +37,9 @@ struct TargetFilter::Impl {
   float meas_sigma_px{8.0F};
   float conf_noise_scale{10.0F};
   double latency_s{0.0};
+  /// Longest capture-to-control extrapolation, seconds. Beyond this the
+  /// constant-acceleration model is no longer a prediction worth steering by.
+  double max_lead_s{0.25};
   double max_coast_s{1.0};
 
   // Geometry.
@@ -197,7 +196,7 @@ struct TargetFilter::Impl {
   /// and place it in the image at the gimbal's newest pose.
   void update_lead(const core::FrameObservation &obs, double now_s) {
     const double waited = std::max(0.0, now_s - obs.timestamp_s_);
-    const double horizon = std::min(latency_s + waited, k_max_lead_s);
+    const double horizon = std::min(latency_s + waited, max_lead_s);
 
     float pan = frame_pan_rad;
     float tilt = frame_tilt_rad;
@@ -322,6 +321,7 @@ TargetFilter::TargetFilter(const config::TrackingConfig &cfg, uint32_t det_width
   impl_->conf_noise_scale = cfg.filter_conf_noise_scale_;
   impl_->latency_s = static_cast<double>(cfg.filter_pipeline_latency_ms_) * 1.0e-3;
   impl_->max_coast_s = static_cast<double>(cfg.filter_max_coast_ms_) * 1.0e-3;
+  impl_->max_lead_s = static_cast<double>(cfg.filter_max_lead_ms_) * 1.0e-3;
 }
 
 TargetFilter::~TargetFilter() = default;
