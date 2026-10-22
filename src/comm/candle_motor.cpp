@@ -171,15 +171,17 @@ static bool mode_is(mab::MD *md, mab::MdMode_E mode) {
 // disable()/zero(), does not reliably take: the drive came back in IDLE and
 // silently ignored every target, which calibration then read as an instant
 // stall. So disable, give the drive time to settle, write the mode, and
-// verify it took, retrying a few times before giving up.
-template <typename Configure>
-static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configure) {
+// verify it took, retrying a few times before giving up. 'wait' sleeps the
+// given number of milliseconds while keeping the other drives' watchdogs fed.
+template <typename Configure, typename Wait>
+static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configure,
+                      const Wait &wait) {
   constexpr int attempts = 3;
   constexpr int verify_polls = 10; // ~100 ms for the mode to show up after enable()
 
   for (int attempt = 0; attempt < attempts; ++attempt) {
     md->disable();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    wait(100);
     md->setMotionMode(mode);
     configure();
     md->enable();
@@ -187,12 +189,29 @@ static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configur
     for (int poll = 0; poll < verify_polls; ++poll) {
       if (mode_is(md, mode))
         return true;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait(10);
     }
   }
 
   md->disable();
   return false;
+}
+
+void CandleMotor::feed_watchdogs(const mab::MD *active) {
+  // A zero velocity target is right for every drive that is not being worked
+  // on: one still in its init() VELOCITY_PID mode or already parked holds
+  // still, and one disabled after a failure ignores it.
+  for (auto *motors : {&pan_motors_, &tilt_motors_})
+    for (auto &md : *motors)
+      if (md != nullptr && md.get() != active)
+        md->setTargetVelocity(0.0F);
+}
+
+void CandleMotor::wait_feeding(const mab::MD *active, int ms) {
+  for (int elapsed = 0; elapsed < ms; elapsed += 10) {
+    feed_watchdogs(active);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10, ms - elapsed)));
+  }
 }
 
 float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float velocity) {
@@ -242,7 +261,7 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
       target = current + direction * max_lead;
     md->setTargetPosition(target);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    wait_feeding(md, 10);
 
     const auto pos = md->getPosition();
     if (pos.second != mab::MD::Error_t::OK) {
@@ -288,10 +307,15 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
   // zeroing.
   md->disable();
   md->zero();
-  if (!arm_drive(md, mab::MdMode_E::IMPEDANCE, [&] {
-        md->setImpedanceParams(kp, kd);
-        md->setMaxTorque(torque);
-      })) {
+  if (!arm_drive(
+        md, mab::MdMode_E::IMPEDANCE,
+        [&] {
+          md->setImpedanceParams(kp, kd);
+          md->setMaxTorque(torque);
+        },
+        [&](int ms) {
+          wait_feeding(md, ms);
+        })) {
     LOG(Error, "CandleMotor: MD" << node_id << ": IMPEDANCE mode did not take (mode "
                                  << static_cast<int>(md->m_mdRegisters.motionModeStatus.value)
                                  << ") — not calibrating");
@@ -367,7 +391,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
         md->setTargetVelocity(0.0F);
         return false;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait_feeding(md, 10);
       continue;
     }
     read_errors = 0;
@@ -399,7 +423,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
 
     integral = std::clamp(integral + err * dt, -max_vel / i_gain, max_vel / i_gain);
     md->setTargetVelocity(std::clamp(gain * err + i_gain * integral, -max_vel, max_vel));
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    wait_feeding(md, 10);
   }
 
   md->setTargetVelocity(0.0F);
@@ -422,14 +446,20 @@ bool CandleMotor::boot_sequence() {
     // Put a successfully calibrated axis back into its velocity-PID mission
     // configuration, so the tracking threads see an enabled motor in the mode
     // the config describes. An axis that failed calibration stays disabled.
-    const auto settle = [g](mab::MD *md, uint16_t node_id, const config::MotorPidConfig &pid) {
+    const auto settle = [this, g](mab::MD *md, uint16_t node_id,
+                                  const config::MotorPidConfig &pid) {
       if (md == nullptr)
         return false;
-      if (!arm_drive(md, mab::MdMode_E::VELOCITY_PID, [&] {
-            md->setVelocityPIDparam(pid.kp_, pid.ki_, pid.kd_, pid.integral_max_);
-            md->setMaxTorque(10.0F);
-            md->setTargetVelocity(0.0F);
-          })) {
+      if (!arm_drive(
+            md, mab::MdMode_E::VELOCITY_PID,
+            [&] {
+              md->setVelocityPIDparam(pid.kp_, pid.ki_, pid.kd_, pid.integral_max_);
+              md->setMaxTorque(10.0F);
+              md->setTargetVelocity(0.0F);
+            },
+            [&](int ms) {
+              wait_feeding(md, ms);
+            })) {
         LOG(Error, "CandleMotor: MD" << node_id << ": VELOCITY_PID mode did not take (mode "
                                      << static_cast<int>(md->m_mdRegisters.motionModeStatus.value)
                                      << ") — axis disabled");
