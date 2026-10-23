@@ -12,6 +12,21 @@
 
 namespace patronus::tracking {
 
+/// @brief Where to aim from a given instant: the latest estimate extrapolated to
+///        when a command sent then takes hold (`filter_actuation_latency_ms`
+///        later) and placed in the image at the gimbal's pose by then.
+///
+/// Detection pixels, as an aim error from the frame centre, like `Estimate`.
+struct AimPoint {
+  float horizon_s{0.0F};       ///< How far the target's motion was extrapolated.
+  core::Point error_px{};      ///< Aim error when the command takes hold.
+  core::Point velocity_px_s{}; ///< Target velocity, camera motion removed.
+  /// Aim error at the gimbal's pose at the control instant itself, without the
+  /// actuation lead. Pair this one, not `error_px`, with the current encoder
+  /// pose, e.g. to turn it into a bearing.
+  core::Point error_now_px{};
+};
+
 /// @brief Filter output for one camera frame: where the target is, and where it
 ///        is going.
 ///
@@ -51,6 +66,12 @@ public:
     float lead_error_v_px{0.0F};      ///< Aim error at the control instant.
     float lead_vu_px_s{0.0F};         ///< Target velocity at the control instant.
     float lead_vv_px_s{0.0F};         ///< Target velocity at the control instant.
+    float au_px_s2{0.0F};             ///< Target acceleration, camera motion removed.
+    float av_px_s2{0.0F};             ///< Target acceleration, camera motion removed.
+    double capture_s{0.0};            ///< Capture instant the pose was looked up at.
+    float frame_pan_rad{0.0F};        ///< Effective pan at capture, see set_level_tilt().
+    float frame_tilt_rad{0.0F};       ///< Tilt encoder angle at capture.
+    float nis{0.0F};                  ///< Normalised innovation squared, last update.
   };
 
   /// @brief Construct an estimate. Used by TargetFilter; not intended for
@@ -135,19 +156,24 @@ public:
     return v_.camera_compensated;
   }
 
-  /// @brief How far past the frame's capture `lead_error()` and
-  ///        `lead_velocity()` are extrapolated, seconds: the pipeline latency
-  ///        plus the time the observation waited for the tracking loop.
+  /// @brief How far past the frame's capture the target's motion is
+  ///        extrapolated for `lead_error()` and `lead_velocity()`, seconds: the
+  ///        frame's age at the control instant plus the actuation latency,
+  ///        capped at `filter_max_lead_ms`.
+  ///        The gimbal's own rotation over that age is not capped.
   [[nodiscard]] float lead_horizon_s() const noexcept {
     return v_.lead_horizon_s;
   }
-  /// @brief Aim error at the instant the control law runs, pixels.
+  /// @brief Aim error a command sent now acts on, pixels.
   ///
   /// The filter's state extrapolated over `lead_horizon_s()` along its
-  /// constant-acceleration model, and placed in the image using the newest
-  /// gimbal encoder sample rather than the pose at capture. This is what the
-  /// motors should act on: by the time a detection reaches the tracking loop,
-  /// both the target and the gimbal have moved on.
+  /// constant-acceleration model, and placed in the image using the gimbal pose
+  /// `filter_actuation_latency_ms` after the control instant rather than the
+  /// pose at capture: every bit of rotation the motors made since the frame was
+  /// taken, and the rotation they will still make at their current rate before
+  /// the command takes hold, is accounted for. This is what the motors should
+  /// act on: by the time a detection reaches the tracking loop, both the target
+  /// and the gimbal have moved on, and the gimbal does not stop on the spot.
   [[nodiscard]] core::Point lead_error() const noexcept {
     return core::Point{v_.lead_error_u_px, v_.lead_error_v_px};
   }
@@ -155,6 +181,29 @@ public:
   ///        removed, pixels/s.
   [[nodiscard]] core::Point lead_velocity() const noexcept {
     return core::Point{v_.lead_vu_px_s, v_.lead_vv_px_s};
+  }
+
+  /// @brief Target acceleration, camera motion removed, pixels/s².
+  [[nodiscard]] core::Point acceleration() const noexcept {
+    return core::Point{v_.au_px_s2, v_.av_px_s2};
+  }
+  /// @brief Capture instant of this frame on the steady clock, as the filter
+  ///        used it: the pipeline's stamp, or the latency fallback.
+  [[nodiscard]] double capture_s() const noexcept {
+    return v_.capture_s;
+  }
+  /// @brief Effective pan (pan folded by `cos(elevation)`) at capture, radians.
+  [[nodiscard]] float frame_pan_rad() const noexcept {
+    return v_.frame_pan_rad;
+  }
+  /// @brief Tilt encoder angle at capture, radians.
+  [[nodiscard]] float frame_tilt_rad() const noexcept {
+    return v_.frame_tilt_rad;
+  }
+  /// @brief Normalised innovation squared of the latest update attempt,
+  ///        accepted or gated. Averages 2 when the noise model fits the data.
+  [[nodiscard]] float nis() const noexcept {
+    return v_.nis;
   }
 
   /// @brief Aim error `horizon_s` seconds into the future.
@@ -201,7 +250,15 @@ private:
 /// frame: every measurement is shifted by `-focal * delta_angle`, using the
 /// gimbal encoder angle at the frame's capture, so a target that holds still in
 /// the world holds still in the filter. Positions are converted back to image
-/// space on output.
+/// space on output, at the pose of the frame for `Estimate::error_u_px()` and at
+/// the current pose for `Estimate::lead_error()`.
+///
+/// The capture instant is `FrameObservation::captured_at_s_` (mid-exposure,
+/// from the buffer PTS less readout and half the exposure) when the pipeline
+/// provides it. Only without it does the filter guess it from
+/// the arrival time and `filter_pipeline_latency_ms`. Getting this wrong is not
+/// subtle: looking up the pose even 50 ms late while slewing at 1 rad/s puts
+/// `0.05 * focal` pixels of the gimbal's motion into the target's.
 ///
 /// This needs `focal_x_px_`/`focal_y_px_` (computed from the lens and
 /// sensor specs) and a motor to read encoders from. Without either, the
@@ -248,8 +305,15 @@ public:
   /// @brief Frames since the last accepted detection.
   [[nodiscard]] int coast_frames() const noexcept;
 
+  /// @brief Tilt encoder angle at which the camera looks at the horizon, radians.
+  ///
+  /// Panning sweeps the view sideways by `cos(elevation)` times the pan angle,
+  /// and the elevation is measured from here. Defaults to 0.
+  void set_level_tilt(float tilt_rad) noexcept;
+
   /// @brief Record the gimbal's encoder angles for the current instant.
-  /// @param t_s      Time on the shared steady-clock base, seconds.
+  /// @param t_s      Time on the shared steady-clock base, seconds, at which
+  ///                 the angles were read.
   /// @param pan_rad  Pan encoder angle, radians.
   /// @param tilt_rad Tilt encoder angle, radians.
   ///
@@ -267,9 +331,9 @@ public:
   ///                    no detection is still a step: the filter predicts across
   ///                    it.
   /// @param now_s       Current time on the shared steady-clock base, seconds.
-  ///                    Sets how far `Estimate::lead_error()` is extrapolated;
-  ///                    values older than the observation are treated as the
-  ///                    observation's own timestamp.
+  ///                    Sets how far `Estimate::lead_error()` is extrapolated
+  ///                    and the gimbal pose it is placed at; values older than
+  ///                    the frame's capture extrapolate the target not at all.
   /// @return The estimate at that frame, or `std::nullopt` while there is no
   ///         track: before a first detection, and again after the track has been
   ///         dropped for coasting past `filter_max_coast_ms`.
@@ -279,6 +343,23 @@ public:
   ///       ignored.
   [[nodiscard]] std::optional<Estimate> step(const core::FrameObservation &observation,
                                              double now_s);
+
+  /// @brief Aim error for a command sent at `now_s`, from the latest frame's
+  ///        estimate and the gimbal's pose when that command takes hold.
+  ///
+  /// HOT PATH: const, no allocation. Call every tracking tick, not just when a
+  /// frame arrives. Between frames the target estimate is unchanged, but the
+  /// gimbal keeps turning; recomputing the error from the newest encoder sample
+  /// closes the loop on the gimbal's own motion at the tick rate instead of
+  /// the camera's frame rate. Holding the frame-time error for a whole frame
+  /// instead keeps the gimbal correcting for rotation it has already made,
+  /// which is what makes it overshoot. For the same reason the pose is taken
+  /// `filter_actuation_latency_ms` past `now_s`, extrapolated along the
+  /// gimbal's measured rate: the rotation it makes before the command takes
+  /// hold is not the command's to ask for again.
+  ///
+  /// @return std::nullopt when there is no track.
+  [[nodiscard]] std::optional<AimPoint> aim_at(double now_s) const;
 
   /// @brief Drop the estimate and require a fresh detection to re-seed.
   void reset() noexcept;

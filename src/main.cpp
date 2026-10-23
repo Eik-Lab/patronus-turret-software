@@ -8,6 +8,7 @@
 #include "tracking/aim_control.h"
 #include "tracking/prediction_overlay.h"
 #include "tracking/target_filter.h"
+#include "tracking/telemetry.h"
 
 #include "log.h"
 
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <csignal>
 #include <memory>
+#include <sstream>
 #include <optional>
 #include <string>
 #include <thread>
@@ -142,6 +144,12 @@ int main(int argc, char *argv[]) {
   // only when it has a motor handle.
   std::vector<std::thread> tracking_threads;
   std::shared_ptr<patronus::comm::CandleMotor> motor;
+
+  // Shared by every tracking thread; destroyed after they have joined, which
+  // flushes the files.
+  std::shared_ptr<patronus::tracking::Telemetry> telemetry;
+  if (cfg.telemetry_.enabled_ && (rgb_active || mono_active))
+    telemetry = patronus::tracking::Telemetry::open(cfg.telemetry_.dir_, cfg_path);
   if (cfg.tracking_) {
     motor = std::make_shared<patronus::comm::CandleMotor>(cfg.gimbals_, cfg.can_bus_);
     if (!motor->init()) {
@@ -193,18 +201,19 @@ int main(int argc, char *argv[]) {
       const auto trk = cfg.tracking_cfg_[g];
       const auto gimbal_cfg = cfg.gimbals_[g];
 
-      // Round-robin across cameras among the gimbals that carry one; when only
-      // one pipeline is active, every such gimbal reads from it. The pipeline
-      // a gimbal reads from is also the one whose geometry and focal lengths
-      // its filter must use, so select it once here and capture it by value.
-      const bool use_rgb = (rgb_active && mono_active) ? (k % 2 == 0) : rgb_active;
+      // Round-robin across cameras among the gimbals that carry one, mono first
+      // (the telephoto tracks at range); when only one pipeline is active, every
+      // such gimbal reads from it. The pipeline a gimbal reads from is also the
+      // one whose geometry and focal lengths its filter must use, so select it
+      // once here and capture it by value.
+      const bool use_rgb = (rgb_active && mono_active) ? (k % 2 != 0) : rgb_active;
       const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
       auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
       const std::vector<size_t> follower_ids = followers[g];
       const auto all_gimbals = cfg.gimbals_;
 
       tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, use_rgb,
-                                     predictions, follower_ids, all_gimbals]() {
+                                     predictions, follower_ids, all_gimbals, telemetry]() {
         auto *det = use_rgb ? &detection_rgb : &detection_mono;
 
         patronus::tracking::TargetFilter filter(trk, pipe.detection_width_, pipe.detection_height_,
@@ -238,6 +247,20 @@ int main(int argc, char *argv[]) {
         }
         const auto home = driving ? motor->home_position(g) : std::pair<float, float>{0.0F, 0.0F};
         std::pair<float, float> pose{0.0F, 0.0F};
+
+        // Home is the centre of the calibrated tilt range, which is taken as
+        // looking at the horizon.
+        filter.set_level_tilt(home.second);
+
+        if (telemetry) {
+          std::ostringstream note;
+          note << "gimbal " << g << " camera " << (use_rgb ? "rgb" : "mono") << " det_w "
+               << pipe.detection_width_ << " det_h " << pipe.detection_height_ << " focal_x "
+               << pipe.focal_x_px_ << " focal_y " << pipe.focal_y_px_ << " home_pan " << home.first
+               << " home_tilt " << home.second << " driving " << (driving ? 1 : 0)
+               << " ego " << (filter.ego_compensation_active() ? 1 : 0);
+          telemetry->note(note.str());
+        }
 
         const auto aim_followers = [&](patronus::core::Point error_px) {
           if (!lead_followers)
@@ -292,23 +315,41 @@ int main(int argc, char *argv[]) {
         const float half_w = det_w * 0.5F;
         const float half_h = det_h * 0.5F;
 
-        // The filter's estimate for the most recent frame, and the motor command
-        // computed from it. Both are held between frames: the command is re-sent
-        // every tick so the motors keep being serviced, but it only changes when
-        // a new frame gives the filter something new to say.
+        // The filter's estimate for the most recent frame. Held between frames;
+        // the motor command is not; see below.
         std::optional<patronus::tracking::Estimate> est;
-        patronus::core::AimAngles cmd{0.0F, 0.0F};
+
+        // This tick's telemetry. Filled in as the tick goes, and queued at the
+        // top of the next one, so the early `continue`s below cannot skip it.
+        patronus::tracking::TickRecord tick_rec;
+        bool tick_pending = false;
 
         while (running) {
+          if (telemetry && tick_pending)
+            telemetry->record(tick_rec);
+          tick_pending = telemetry != nullptr;
+          tick_rec = patronus::tracking::TickRecord{};
+          tick_rec.gimbal = static_cast<uint32_t>(g);
+          tick_rec.driving = driving;
+          tick_rec.cmd_pan_rad_s = 0.0F;
+          tick_rec.cmd_tilt_rad_s = 0.0F;
+
           const auto now = std::chrono::steady_clock::now();
           const double t_s = patronus::core::steady_now_s();
+          tick_rec.t_s = t_s;
 
           // Record the encoder angle every tick, so the filter can look up the
           // pose that was current when a frame was captured. Without a motor
           // there is no pose to record, and camera motion goes uncompensated.
+          // Each axis is a CAN register read, so the pose is stamped halfway
+          // through the reads rather than before them.
           if (driving) {
             pose = motor->get_position(g);
-            filter.push_gimbal_sample(t_s, pose.first, pose.second);
+            const double read_s = 0.5 * (t_s + patronus::core::steady_now_s());
+            filter.push_gimbal_sample(read_s, pose.first, pose.second);
+            tick_rec.t_s = read_s;
+            tick_rec.pan_rad = pose.first;
+            tick_rec.tilt_rad = pose.second;
           }
 
           // One observation per camera frame, with or without a detection.
@@ -323,7 +364,11 @@ int main(int argc, char *argv[]) {
 
           if (trk.filter_enabled_) {
             if (opt.has_value()) {
-              est = filter.step(*opt, patronus::core::steady_now_s());
+              const double step_s = patronus::core::steady_now_s();
+              est = filter.step(*opt, step_s);
+              if (telemetry)
+                telemetry->record(
+                  patronus::tracking::FrameRecord{static_cast<uint32_t>(g), step_s, *opt, est});
 
               // Publish for the overlay whenever there is an estimate, not only
               // when we are aiming. A coasting prediction is exactly what an
@@ -346,12 +391,6 @@ int main(int argc, char *argv[]) {
                 sample.detection_frame_id = est->detection_frame_id();
                 sample.measured = est->measured();
                 predictions->publish(g, sample);
-
-                // Steer by where the target is now, not where it was when the
-                // frame was captured: the estimate is extrapolated across the
-                // pipeline latency and placed at the gimbal's current pose.
-                cmd = patronus::tracking::compute_control_sensor(est->lead_error(),
-                                                                 est->lead_velocity(), gains);
               } else {
                 // No track: never seeded, or dropped after coasting too long.
                 predictions->clear(g);
@@ -361,11 +400,27 @@ int main(int argc, char *argv[]) {
             const bool fresh = now - last_detection < stale_after;
             aiming = est.has_value() && fresh;
             if (aiming && driving) {
-              motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
-                                  cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
-              aim_followers(est->lead_error());
+              // Recomputed every tick, not once per frame: the target estimate
+              // only changes when a frame arrives, but the gimbal keeps turning,
+              // and the error is re-placed at its newest encoder pose. That
+              // closes the loop on the gimbal's own motion at the tick rate;
+              // holding a per-frame command overshoots.
+              if (const auto aim = filter.aim_at(patronus::core::steady_now_s()); aim.has_value()) {
+                const auto cmd = patronus::tracking::compute_control_sensor(
+                  aim->error_px, aim->velocity_px_s, gains);
+                const auto sent = motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                                      cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+                tick_rec.aim = aim;
+                tick_rec.cmd_pan_rad_s = sent.first;
+                tick_rec.cmd_tilt_rad_s = sent.second;
+                aim_followers(aim->error_now_px);
+              }
             }
-          } else if (opt.has_value() && opt->detection_.has_value() && driving) {
+          } else if (opt.has_value() && telemetry) {
+            telemetry->record(patronus::tracking::FrameRecord{
+              static_cast<uint32_t>(g), patronus::core::steady_now_s(), *opt, std::nullopt});
+          }
+          if (!trk.filter_enabled_ && opt.has_value() && opt->detection_.has_value() && driving) {
             // Filter disabled: drive straight off the raw detection.
             const patronus::core::Detection d = *opt->detection_;
             const patronus::core::Point center{d.left_ + (d.width_ / 2.0F),
@@ -374,11 +429,16 @@ int main(int argc, char *argv[]) {
                                                                    pipe.detection_height_);
             const auto raw_cmd = patronus::tracking::compute_control_sensor(
               error, patronus::core::Point{0.0F, 0.0F}, gains);
-            motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
-                                raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+            const auto sent = motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                                  raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_);
+            tick_rec.cmd_pan_rad_s = sent.first;
+            tick_rec.cmd_tilt_rad_s = sent.second;
             aim_followers(error);
             aiming = true;
           }
+
+          tick_rec.aiming = aiming;
+          tick_rec.state = static_cast<int>(state);
 
           // Everything below holds position or returns home, which is motor
           // work only.
@@ -397,6 +457,8 @@ int main(int argc, char *argv[]) {
           park_followers(state == State::Tracking);
 
           if (state == State::ReturningHome) {
+            tick_rec.cmd_pan_rad_s = std::nanf("");
+            tick_rec.cmd_tilt_rad_s = std::nanf("");
             if (motor->return_to_home(g, trk.home_return_gain_, trk.home_tolerance_rad_,
                                       trk.home_return_max_velocity_)) {
               state = State::AtHome;
@@ -414,6 +476,9 @@ int main(int argc, char *argv[]) {
             LOG(Warning, "Tracking gimbal " << g << ": lost target — returning to home");
           }
         }
+
+        if (telemetry && tick_pending)
+          telemetry->record(tick_rec);
 
         // Never leave a gimbal commanded on thread exit, and stop drawing a
         // prediction nothing is maintaining any more.
