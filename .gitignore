@@ -56,3 +56,12 @@ __pycache__/
 .venv
 .env
 !.env.example
+
+# Data, models and training output
+repository_location/
+data/
+*.pt
+runs/
+weights/
+*.log
+*.log
