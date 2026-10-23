@@ -50,7 +50,8 @@ public:
   }
 
   /// @brief Set pan/tilt velocity for a specific gimbal (rad/s).
-  ///        Clamped to the gimbal's max_velocity_rad_s. Hot path: must
+  ///        Multiplied by the axis's velocity scale, then clamped to the
+  ///        axis's max velocity (itself capped at max_velocity_rad_s). Hot path: must
   ///        return within 1 ms. After a boot_sequence() run, a command that
   ///        would push a calibrated axis further past its software limit is
   ///        zeroed (moving away from the limit is always allowed), which

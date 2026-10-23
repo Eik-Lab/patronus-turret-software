@@ -499,9 +499,14 @@ void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s)
   if (pan == nullptr || tilt == nullptr)
     return;
 
-  const float max_vel = gimbals_[gimbal].max_velocity_rad_s_;
-  pan_rad_s = std::clamp(pan_rad_s, -max_vel, max_vel);
-  tilt_rad_s = std::clamp(tilt_rad_s, -max_vel, max_vel);
+  // Scale down, then clamp to each axis's own limit (never above max_velocity).
+  // Every command goes through here, so tracking, following and homing all
+  // see the same scale and clamp.
+  const auto &cfg = gimbals_[gimbal];
+  pan_rad_s = std::clamp(pan_rad_s * cfg.pan_velocity_scale_, -cfg.pan_max_velocity_rad_s_,
+                         cfg.pan_max_velocity_rad_s_);
+  tilt_rad_s = std::clamp(tilt_rad_s * cfg.tilt_velocity_scale_, -cfg.tilt_max_velocity_rad_s_,
+                          cfg.tilt_max_velocity_rad_s_);
 
   const std::scoped_lock lock(bus_mutex_);
   // Software limits from boot calibration: a command that would push a
