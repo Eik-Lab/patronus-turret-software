@@ -154,6 +154,17 @@ private:
   /// Caller must hold bus_mutex_ and have the axis enabled in VELOCITY_PID.
   bool park_axis(mab::MD *md, uint16_t node_id, float target);
 
+  /// Send a zero velocity target to every drive except 'active'. Each MD
+  /// disables itself, and drops back to IDLE, once its CAN watchdog
+  /// (100-200 ms) passes without a frame, so while boot_sequence() works on
+  /// one axis for tens of seconds the others must still be addressed. Caller
+  /// must hold bus_mutex_.
+  void feed_watchdogs(const mab::MD *active);
+
+  /// Sleep 'ms' milliseconds in 10 ms steps, feeding the other drives'
+  /// watchdogs at each step. Caller must hold bus_mutex_.
+  void wait_feeding(const mab::MD *active, int ms);
+
   /// Zero a velocity command that would push a calibrated axis past its
   /// software limit. Caller must hold bus_mutex_.
   float apply_limit(mab::MD *md, const SoftLimit &limit, float velocity);
