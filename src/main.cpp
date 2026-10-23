@@ -146,6 +146,11 @@ int main(int argc, char *argv[]) {
     if (!motor->init()) {
       LOG(Error, "Failed to initialise CANdle motor driver — tracking disabled");
       motor.reset();
+    } else if (!motor->boot_sequence()) {
+      // Only runs axes whose [can_N] calibrate_on_boot is set. Each calibrated
+      // axis parks at the centre of its range, which becomes its home; an axis
+      // that failed keeps its start pose as home.
+      LOG(Warning, "Boot calibration failed for at least one axis — treat its limits as unknown");
     }
   }
 
