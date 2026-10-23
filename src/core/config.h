@@ -46,10 +46,19 @@ struct GimbalConfig {
   uint16_t pan_node_id_{16};        ///< CAN node ID for the pan motor.
   uint16_t tilt_node_id_{18};       ///< CAN node ID for the tilt motor.
   float max_velocity_rad_s_{6.28f}; ///< Maximum velocity command.
-  float tilt_max_rad_{0.611f};   ///< Maximum tilt output angle (±rad).
-  bool calibrate_on_boot_{false}; ///< Run axis barrier calibration in boot_sequence() at start.
-  MotorPidConfig pan_pid_;        ///< Velocity-PID gains for the pan motor.
+  float tilt_max_rad_{0.611f};      ///< Maximum tilt output angle (±rad).
+  bool calibrate_on_boot_{false};   ///< Run axis barrier calibration in boot_sequence() at start.
+  MotorPidConfig pan_pid_;          ///< Velocity-PID gains for the pan motor.
   MotorPidConfig tilt_pid_;         ///< Velocity-PID gains for the tilt motor.
+
+  /// 1-based [can_N] index of the gimbal whose camera this one follows, or 0
+  /// when it tracks from a camera of its own. A follower (e.g. a pointer on a
+  /// separate gimbal) runs no image loop: it is driven to the target bearing
+  /// that the leader's camera reports.
+  uint16_t follow_{0};
+  float follow_gain_{5.0f};     ///< Follower P-gain, rad/s per rad of bearing error.
+  float pan_offset_rad_{0.0f};  ///< Follower pan home minus leader pan home, when aligned.
+  float tilt_offset_rad_{0.0f}; ///< Follower tilt home minus leader tilt home, when aligned.
 };
 
 /// @brief Tracking loop configuration for a single gimbal.

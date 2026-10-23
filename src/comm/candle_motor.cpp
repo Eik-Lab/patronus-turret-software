@@ -273,8 +273,8 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
   return false;
 }
 
-bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float kd,
-                                 float torque, float backoff, SoftLimit &limit) {
+bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float kd, float torque,
+                                 float backoff, SoftLimit &limit) {
   constexpr float step = 0.05F; // calibration speed, rad per 10 ms tick
 
   // The target may sit ahead of the motor by at most this much: enough to
@@ -312,8 +312,7 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
 
   if (upper - lower <= 2.0F * backoff) {
     LOG(Warning, "CandleMotor: MD" << node_id << ": range (" << (upper - lower)
-                                   << " rad) is too small for a backoff of " << backoff
-                                   << " rad");
+                                   << " rad) is too small for a backoff of " << backoff << " rad");
     md->disable();
     return false;
   }
@@ -322,8 +321,8 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
   limit.min_pos = lower + backoff;
   limit.max_pos = upper - backoff;
   limit.calibrated = true;
-  LOG(Info, "CandleMotor: MD" << node_id << " calibrated, soft limits: [" << limit.min_pos
-                              << ", " << limit.max_pos << "] rad");
+  LOG(Info, "CandleMotor: MD" << node_id << " calibrated, soft limits: [" << limit.min_pos << ", "
+                              << limit.max_pos << "] rad");
 
   // The centre of the range is home. The axis is at the lower barrier now:
   // stop pushing into it, and let park_axis() move it to the centre once it
@@ -442,8 +441,8 @@ bool CandleMotor::boot_sequence() {
 
     // A parking miss is only logged: the limits are still valid, and
     // return_to_home() keeps driving toward the centre once tracking starts.
-    if (calibrate_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, k_pan_boot_kp,
-                       k_pan_boot_kd, k_pan_boot_torque, k_boot_backoff_rad, pan_limits_[g]) &&
+    if (calibrate_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, k_pan_boot_kp, k_pan_boot_kd,
+                       k_pan_boot_torque, k_boot_backoff_rad, pan_limits_[g]) &&
         settle(pan_motors_[g].get(), gimbals_[g].pan_node_id_, gimbals_[g].pan_pid_))
       park_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, pan_limits_[g].home_pos);
     else
@@ -508,8 +507,22 @@ std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
   return {pp.first, tp.first};
 }
 
+std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
+  if (gimbal >= gimbals_.size())
+    return {0.0F, 0.0F};
+  return {pan_limits_[gimbal].home_pos, tilt_limits_[gimbal].home_pos};
+}
+
 bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                                  float max_velocity_rad_s) {
+  // Home is the centre of the calibrated range, or the start pose (0) for
+  // axes that were not calibrated this boot.
+  const auto [home_pan, home_tilt] = home_position(gimbal);
+  return drive_to(gimbal, home_pan, home_tilt, position_gain, tolerance_rad, max_velocity_rad_s);
+}
+
+bool CandleMotor::drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                           float tolerance_rad, float max_velocity_rad_s) {
   if (gimbal >= gimbals_.size())
     return true;
   auto *pan = pan_motors_[gimbal].get();
@@ -521,11 +534,9 @@ bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float toler
                         ? std::min(max_velocity_rad_s, gimbals_[gimbal].max_velocity_rad_s_)
                         : gimbals_[gimbal].max_velocity_rad_s_;
 
-  // Home is the centre of the calibrated range, or the start pose (0) for
-  // axes that were not calibrated this boot.
   const auto [pp, pt] = get_position(gimbal);
-  const float pan_err = pp - pan_limits_[gimbal].home_pos;
-  const float tilt_err = pt - tilt_limits_[gimbal].home_pos;
+  const float pan_err = pp - pan_rad;
+  const float tilt_err = pt - tilt_rad;
   const float pan_vel = std::clamp(-pan_err * position_gain, -limit, limit);
   const float tilt_vel = std::clamp(-tilt_err * position_gain, -limit, limit);
   set_velocity(gimbal, pan_vel, tilt_vel);
