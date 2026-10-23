@@ -119,6 +119,7 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.tilt_max_rad_ = read_float(kf, group, "tilt_max_rad", 0.611F);
   if (cfg.tilt_max_rad_ <= 0.0F)
     cfg.tilt_max_rad_ = 0.611F;
+  cfg.calibrate_on_boot_ = read_bool(kf, group, "calibrate_on_boot", false);
   cfg.pan_pid_ = read_pid(kf, group, "pan");
   cfg.tilt_pid_ = read_pid(kf, group, "tilt");
   return cfg;
