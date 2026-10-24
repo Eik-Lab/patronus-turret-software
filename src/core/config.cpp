@@ -75,6 +75,9 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   if (cfg.detection_height_ == 0U)
     cfg.detection_height_ = 1088U;
   cfg.draw_predictions_ = read_bool(kf, group, "draw_predictions", true);
+  cfg.readout_ms_ = read_float(kf, group, "readout_ms", 0.0F);
+  cfg.binning_ = std::clamp(read_uint<uint32_t>(kf, group, "binning", 1), 1U, 4U);
+  cfg.grab_buffers_ = read_uint<uint32_t>(kf, group, "grab_buffers", 0);
   cfg.prediction_lead_s_ = read_float(kf, group, "prediction_lead_s", 0.15F);
   if (!(cfg.prediction_lead_s_ > 0.0F))
     cfg.prediction_lead_s_ = 0.15F;
@@ -179,6 +182,9 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
   cfg.filter_max_lead_ms_ =
     static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_lead_ms", 250));
   cfg.filter_max_lead_ms_ = std::max(cfg.filter_max_lead_ms_, 0);
+  cfg.filter_actuation_latency_ms_ =
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_actuation_latency_ms", 0));
+  cfg.filter_actuation_latency_ms_ = std::max(cfg.filter_actuation_latency_ms_, 0);
   cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
   if (cfg.filter_conf_noise_scale_ < 0.0F)
     cfg.filter_conf_noise_scale_ = 10.0F;
@@ -242,6 +248,12 @@ SystemConfig load_config(const std::string &path) {
   // [commands]
   if (g_key_file_has_group(kf, "commands"))
     sys.command_ = read_command(kf, "commands");
+
+  // [telemetry]
+  if (g_key_file_has_group(kf, "telemetry")) {
+    sys.telemetry_.enabled_ = read_bool(kf, "telemetry", "enabled", false);
+    sys.telemetry_.dir_ = read_string(kf, "telemetry", "dir", "telemetry");
+  }
 
   // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {

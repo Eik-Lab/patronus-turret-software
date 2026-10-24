@@ -49,6 +49,7 @@ set(INFERENCE_SOURCES
     tracking/aim_control.cpp
     tracking/target_filter.cpp
     tracking/prediction_overlay.cpp
+    tracking/telemetry.cpp
     comm/candle_motor.cpp
     comm/command_listener.cpp
     comm/sensor_module.cpp)
@@ -61,6 +62,7 @@ set(INFERENCE_HEADERS
     pipeline/inference_rgb.h
     tracking/aim_control.h
     tracking/prediction_overlay.h
+    tracking/telemetry.h
     tracking/target_filter.h
     comm/candle_motor.h
     comm/command_listener.h
@@ -98,3 +100,35 @@ target_link_libraries(
           pthread
           candle
           kalman::kalman)
+
+# Focal-length calibration tool (needs the pylon SDK; see
+# src/tools/focal_calib.cpp). Built only when pylon is installed.
+find_path(
+  PYLON_INCLUDE_DIR pylon/PylonIncludes.h
+  PATHS /opt/pylon/include
+  NO_DEFAULT_PATH)
+find_path(
+  PYLON_LIB_DIR libpylonbase.so
+  PATHS /opt/pylon/lib
+  NO_DEFAULT_PATH)
+if(PYLON_INCLUDE_DIR AND PYLON_LIB_DIR)
+  add_executable(focal_calib tools/focal_calib.cpp core/config.cpp comm/candle_motor.cpp)
+  target_include_directories(
+    focal_calib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} /usr/include/glib-2.0
+                        /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)
+  target_include_directories(focal_calib SYSTEM PRIVATE ${PYLON_INCLUDE_DIR})
+  target_link_directories(focal_calib PRIVATE ${PYLON_LIB_DIR})
+  target_link_libraries(
+    focal_calib
+    PRIVATE pylonbase
+            pylonutility
+            GenApi_gcc_v3_5_Basler_pylon_v1
+            GCBase_gcc_v3_5_Basler_pylon_v1
+            glib-2.0
+            pthread
+            candle)
+  set_target_properties(focal_calib PROPERTIES BUILD_RPATH ${PYLON_LIB_DIR})
+  message("-- pylon: ${PYLON_INCLUDE_DIR} (building focal_calib)")
+else()
+  message("-- pylon: NOT FOUND (focal_calib not built)")
+endif()

@@ -491,13 +491,14 @@ bool CandleMotor::boot_sequence() {
 
 // ── Per-gimbal API ───────────────────────────────────────────────────────────
 
-void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s) {
+std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s,
+                                                  float tilt_rad_s) {
   if (gimbal >= gimbals_.size())
-    return;
+    return {0.0F, 0.0F};
   auto *pan = pan_motors_[gimbal].get();
   auto *tilt = tilt_motors_[gimbal].get();
   if (pan == nullptr || tilt == nullptr)
-    return;
+    return {0.0F, 0.0F};
 
   // Scale down, then clamp to each axis's own limit (never above max_velocity).
   // Every command goes through here, so tracking, following and homing all
@@ -518,6 +519,7 @@ void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s)
 
   pan->setTargetVelocity(pan_rad_s);
   tilt->setTargetVelocity(tilt_rad_s);
+  return {pan_rad_s, tilt_rad_s};
 }
 
 std::pair<float, float> CandleMotor::get_velocity(size_t gimbal) {
