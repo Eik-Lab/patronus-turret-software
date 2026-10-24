@@ -1,6 +1,8 @@
 import os
+import shutil
 from pathlib import Path
 
+import yaml
 from ultralytics import YOLO
 
 from src.export import export_fp16
@@ -67,7 +69,10 @@ class Yolo(Model):
         weights_dir = Path(model.trainer.save_dir) / "weights"
         best_pt = weights_dir / "best.pt"
         if best_pt.is_file():
-            YOLO(str(best_pt)).export(format="onnx", imgsz=train_cfg["image_size"])
+            try:
+                YOLO(str(best_pt)).export(format="onnx", imgsz=train_cfg["image_size"], simplify=True)
+            except Exception as e:
+                print(f"  Warning: ONNX export failed: {e}")
         for pt in weights_dir.glob("*.pt"):
             pt.unlink()
 
@@ -75,7 +80,49 @@ class Yolo(Model):
         if onnx_path.is_file():
             size_mb = onnx_path.stat().st_size / (1024 * 1024)
             print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
-            export_fp16(str(onnx_path))
+            try:
+                export_fp16(str(onnx_path))
+            except Exception as e:
+                print(f"  Warning: FP16 export failed: {e}")
+            # Copy to main output dir and generate artifacts
+            main_onnx = os.path.join(train_cfg["output_dir"], "model.onnx")
+            try:
+                shutil.copy(onnx_path, main_onnx)
+                fp16_out = os.path.join(train_cfg["output_dir"], "model_fp16.onnx")
+                fp16_w = weights_dir / "best_fp16.onnx"
+                if fp16_w.exists():
+                    shutil.copy(fp16_w, fp16_out)
+            except Exception as e:
+                print(f"  Warning: Failed to copy ONNX: {e}")
+            # Generate inference artifacts
+            try:
+                from src.model.base import _generate_inference_artifacts, _run_post_training_eval
+                id2label = {}
+                # Try to get from data.yaml
+                try:
+                    ds_cfg = config["dataset"]
+                    data_yaml = ds_cfg.get("data_yaml") or os.path.join(ds_cfg["root"], "data.yaml")
+                    with open(data_yaml) as f:
+                        data = yaml.safe_load(f)
+                    names = data.get("names", {})
+                    if isinstance(names, list):
+                        id2label = {i: n for i, n in enumerate(names)}
+                    elif isinstance(names, dict):
+                        id2label = names
+                except Exception:
+                    pass
+                if not id2label:
+                    id2label = {0: "drone"}
+                _generate_inference_artifacts(
+                    train_cfg["output_dir"],
+                    id2label,
+                    train_cfg["image_size"],
+                    model_cfg.get("name", "yolo"),
+                    config,
+                )
+                _run_post_training_eval(train_cfg["output_dir"], config, train_cfg["image_size"])
+            except Exception as e:
+                print(f"  Warning: Failed to generate artifacts: {e}")
 
         rd = getattr(results, "results_dict", {})
         metrics = {

@@ -1,6 +1,8 @@
 import math
 import os
 import shutil
+import subprocess
+import sys
 from functools import partial
 from pathlib import Path
 from inspect import signature
@@ -27,6 +29,12 @@ from src.samples import SampleGridCallback
 from src.utils.filter_dataset import filter_coco_dataset
 
 
+def _model_training_dir():
+    """Return the model_training/ directory that owns the helper scripts."""
+    # This module lives in <repo>/model_training/src/model/.
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 class Model:
     name = "model"
     coco_dataset = True
@@ -38,8 +46,46 @@ class Model:
         raise NotImplementedError
 
 
-def _export_onnx(model, output_dir, image_size):
+def _export_onnx(model, output_dir, image_size, model_name=None, config=None):
     """Export the detection model to ONNX with onnxslim optimisation."""
+    model_name = model_name or ""
+    model_name_lower = str(model_name).lower()
+    config = config or {}
+    model_cfg = config.get("model", {}) if isinstance(config, dict) else {}
+
+    # Use RF-DETR specific export if it's an RF-DETR model
+    if "rfdetr" in model_name_lower or "rf-detr" in model_name_lower or model_cfg.get("type") == "rfdetr":
+        try:
+            # Try to use the dedicated export script
+            export_script = os.path.join(_model_training_dir(), "export_rfdetr_onnx.py")
+            if not os.path.exists(export_script):
+                export_script = os.path.join(os.getcwd(), "export_rfdetr_onnx.py")
+            if os.path.exists(export_script):
+                onnx_path = os.path.join(output_dir, f"{os.path.basename(output_dir) or 'model'}.onnx")
+                cmd = [
+                    sys.executable,
+                    export_script,
+                    "--model-dir", str(output_dir),
+                    "--output", str(onnx_path),
+                    "--resolution", str(image_size),
+                    "--fold-normalization",
+                    "--check",
+                ]
+                print(f"  Exporting with RF-DETR specific exporter: {' '.join(cmd)}")
+                subprocess.run(cmd, cwd=os.path.dirname(export_script), check=True)
+                # Validate ONNX
+                try:
+                    import onnx as onnx_lib
+                    onnx_model = onnx_lib.load(str(onnx_path))
+                    onnx_lib.checker.check_model(onnx_model)
+                    print("  ONNX validation passed")
+                except Exception as ve:
+                    print(f"  Warning: ONNX validation failed: {ve}")
+                size_mb = os.path.getsize(onnx_path) / (1024 * 1024) if os.path.exists(onnx_path) else 0
+                print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
+                return onnx_path
+        except Exception as e:
+            print(f"  Warning: RF-DETR specific export failed, falling back to generic export: {e}")
 
     class _Wrapper(torch.nn.Module):
         def __init__(self, inner):
@@ -48,7 +94,14 @@ def _export_onnx(model, output_dir, image_size):
 
         def forward(self, pixel_values, pixel_mask):
             out = self.inner(pixel_values=pixel_values, pixel_mask=pixel_mask)
-            return out.logits, out.pred_boxes
+            # Try to return in format compatible with DeepStream
+            if hasattr(out, 'logits') and hasattr(out, 'pred_boxes'):
+                return out.logits, out.pred_boxes
+            if isinstance(out, dict):
+                logits = out.get('logits') or out.get('pred_logits')
+                boxes = out.get('pred_boxes') or out.get('boxes')
+                return logits, boxes
+            return out
 
     wrapper = _Wrapper(model).eval()
     device = next(model.parameters()).device
@@ -56,26 +109,48 @@ def _export_onnx(model, output_dir, image_size):
     dummy_mask = torch.ones(1, image_size, image_size, dtype=torch.long, device=device)
 
     onnx_path = os.path.join(output_dir, "model.onnx")
-    torch.onnx.export(
-        wrapper,
-        (dummy_pixels, dummy_mask),
-        onnx_path,
-        input_names=["pixel_values", "pixel_mask"],
-        output_names=["logits", "pred_boxes"],
-        dynamic_axes={
-            "pixel_values": {0: "batch"},
-            "pixel_mask": {0: "batch"},
-            "logits": {0: "batch"},
-            "pred_boxes": {0: "batch"},
-        },
-        opset_version=17,
-    )
+    try:
+        torch.onnx.export(
+            wrapper,
+            (dummy_pixels, dummy_mask),
+            onnx_path,
+            input_names=["pixel_values", "pixel_mask"],
+            output_names=["pred_logits", "pred_boxes"],
+            dynamic_axes={
+                "pixel_values": {0: "batch"},
+                "pixel_mask": {0: "batch"},
+                "pred_logits": {0: "batch"},
+                "pred_boxes": {0: "batch"},
+            },
+            opset_version=17,
+            dynamo=False,
+        )
+    except Exception:
+        # Fallback to old format
+        torch.onnx.export(
+            wrapper,
+            (dummy_pixels, dummy_mask),
+            onnx_path,
+            input_names=["pixel_values", "pixel_mask"],
+            output_names=["logits", "pred_boxes"],
+            dynamic_axes={
+                "pixel_values": {0: "batch"},
+                "pixel_mask": {0: "batch"},
+                "logits": {0: "batch"},
+                "pred_boxes": {0: "batch"},
+            },
+            opset_version=17,
+        )
 
-    slimmed = slim(onnx_path)
-    onnx.save(slimmed, onnx_path)
+    try:
+        slimmed = slim(onnx_path)
+        onnx.save(slimmed, onnx_path)
+    except Exception as e:
+        print(f"  Warning: onnxslim failed: {e}")
 
     size_mb = os.path.getsize(onnx_path) / (1024 * 1024)
     print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
+    return onnx_path
 
 
 def _remove_checkpoints(output_dir):
@@ -258,15 +333,228 @@ class HFDetModel(Model):
         trainer.save_model(output_dir)
         image_processor.save_pretrained(output_dir)
 
-        _export_onnx(
-            trainer.accelerator.unwrap_model(trainer.model), output_dir, image_size
+        onnx_path = _export_onnx(
+            trainer.accelerator.unwrap_model(trainer.model),
+            output_dir,
+            image_size,
+            model_name=model_cfg.get("name", ""),
+            config=config
         )
-        export_fp16(os.path.join(output_dir, "model.onnx"))
+        if onnx_path and os.path.exists(onnx_path):
+            export_fp16(onnx_path)
         _remove_checkpoints(output_dir)
         print(f"  model saved to {output_dir}")
+
+        # Generate labels.txt and inference config
+        try:
+            _generate_inference_artifacts(output_dir, id2label, image_size, model_cfg.get("name", "model"), config)
+        except Exception as e:
+            print(f"  Warning: Failed to generate inference artifacts: {e}")
+
+        # Run evaluation on test/val splits
+        try:
+            _run_post_training_eval(output_dir, config, image_size)
+        except Exception as e:
+            print(f"  Warning: Post-training evaluation failed: {e}")
 
         metrics = trainer.evaluate()
         metrics = {key.removeprefix("eval_"): value for key, value in metrics.items()}
         _print_summary(metrics, id2label)
-
         return metrics
+
+
+def _generate_inference_artifacts(output_dir, id2label, image_size, model_name, config):
+    """Generate labels.txt and DeepStream inference config files."""
+    # Generate labels.txt
+    labels_path = os.path.join(output_dir, "labels.txt")
+    # Sort by label id
+    sorted_labels = []
+    for k in sorted(id2label.keys()):
+        sorted_labels.append(id2label[k])
+    with open(labels_path, 'w') as f:
+        for label in sorted_labels:
+            f.write(f"{label}\n")
+    print(f"  Generated {labels_path} with {len(sorted_labels)} classes")
+
+    # Find ONNX model
+    onnx_path = None
+    for name in os.listdir(output_dir):
+        if name.endswith('.onnx') and not name.endswith('_fp16.onnx'):
+            onnx_path = os.path.join(output_dir, name)
+            break
+    if not onnx_path:
+        onnx_path = os.path.join(output_dir, "model.onnx")
+
+    num_classes = len(sorted_labels)
+    model_name_clean = os.path.basename(output_dir)
+    infer_name = f"config_infer_primary_{model_name_clean}.txt"
+    infer_path = os.path.join(output_dir, infer_name)
+
+    model_name_lower = str(model_name).lower()
+    if "rfdetr" in model_name_lower or "rf-detr" in model_name_lower or config.get("model", {}).get("type") == "rfdetr":
+        parser_lib = os.path.abspath(os.path.join(os.path.dirname(_model_training_dir()), 'deps', 'deepstream-deformable-detr', 'libdeepstream-deformable-detr.so'))
+        config_content = f"""# {model_name_clean} inference config - auto-generated
+# Generated by training pipeline
+
+[property]
+gpu-id=0
+
+# ImageNet normalization folded into model - input is RGB [0,1]
+net-scale-factor=0.00392156862745098
+offsets=0;0;0
+model-color-format=0
+
+onnx-file={os.path.abspath(onnx_path)}
+model-engine-file={os.path.abspath(onnx_path)}_b1_gpu0_fp16.engine
+batch-size=1
+network-mode=2
+
+# Number of classes
+num-detected-classes={num_classes}
+labelfile-path={os.path.abspath(labels_path)}
+
+network-input-order=0
+infer-dims=3;{image_size};{image_size}
+network-type=0
+gie-unique-id=1
+process-mode=1
+
+maintain-aspect-ratio=0
+symmetric-padding=0
+
+# Custom parser for set-prediction detectors
+parse-bbox-func-name=deepstream_deformable_detr_bbox
+custom-lib-path={parser_lib}
+
+cluster-mode=4
+enable-dla=0
+
+[class-attrs-all]
+pre-cluster-threshold=0.5
+roi-top-offset=0
+roi-bottom-offset=0
+"""
+    else:
+        parser_lib = os.path.abspath(os.path.join(os.path.dirname(_model_training_dir()), 'deps', 'deepstream', 'libnvdsinfer_custom_impl_Yolo.so'))
+        config_content = f"""# {model_name_clean} inference config - auto-generated
+
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-engine-file={os.path.abspath(onnx_path)}_b1_gpu0_fp16.engine
+onnx-file={os.path.abspath(onnx_path)}
+labelfile-path={os.path.abspath(labels_path)}
+batch-size=1
+network-mode=2
+num-detected-classes={num_classes}
+gie-unique-id=1
+network-type=0
+cluster-mode=2
+infer-dims=3;{image_size};{image_size}
+maintain-aspect-ratio=1
+symmetric-padding=1
+
+custom-lib-path={parser_lib}
+parse-bbox-func-name=NvDsInferParseYolo
+output-blob-names=output0
+
+[class-attrs-all]
+nms-iou-threshold=0.45
+pre-cluster-threshold=0.25
+topk=300
+"""
+
+    with open(infer_path, 'w') as f:
+        f.write(config_content)
+    print(f"  Generated {infer_path}")
+
+
+def _run_post_training_eval(output_dir, config, image_size):
+    """Run evaluation on test/val datasets after training."""
+    ds_cfg = config.get("dataset", {}) if isinstance(config, dict) else {}
+    test_datasets = []
+
+    # Look for test/val datasets
+    root = ds_cfg.get("root", "")
+    if root and os.path.exists(root):
+        # Check common test dataset locations
+        for candidate in ["test", "val", "val_original", "test_original", "validation"]:
+            cand_path = os.path.join(root, candidate)
+            if os.path.exists(cand_path):
+                test_datasets.append(cand_path)
+        # Also check if there are multiple dataset folders
+        parent = os.path.dirname(root)
+        if parent and os.path.exists(parent):
+            for item in os.listdir(parent):
+                item_path = os.path.join(parent, item)
+                if os.path.isdir(item_path) and item not in [os.path.basename(root), "runs", "models"]:
+                    # Check if it looks like a dataset
+                    if any(os.path.exists(os.path.join(item_path, f)) for f in ["annotations.json", "val_annotations.coco.json", "instances_val.json", "annotations.coco.json"]):
+                        test_datasets.append(item_path)
+
+    # Also check for test_annotations in config
+    if ds_cfg.get("test_annotations"):
+        test_ann = ds_cfg["test_annotations"]
+        if isinstance(test_ann, str):
+            if os.path.isabs(test_ann):
+                test_datasets.append(os.path.dirname(test_ann))
+            elif root:
+                test_datasets.append(os.path.join(root, os.path.dirname(test_ann)))
+        elif isinstance(test_ann, list):
+            for ta in test_ann:
+                if os.path.isabs(ta):
+                    test_datasets.append(os.path.dirname(ta))
+                elif root:
+                    test_datasets.append(os.path.join(root, os.path.dirname(ta)))
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_datasets = []
+    for td in test_datasets:
+        td_abs = os.path.abspath(td)
+        if td_abs not in seen:
+            seen.add(td_abs)
+            unique_datasets.append(td)
+
+    if not unique_datasets:
+        print("  No test datasets found for post-training evaluation")
+        return
+
+    # HF checkpoints are evaluated from the saved directory; YOLO checkpoints
+    # are removed after export, so evaluate its ONNX file instead.
+    model_path = output_dir
+    eval_model_type = "auto"
+    config_model_type = str(config.get("model", {}).get("type", "")).lower()
+    if config_model_type in ("yolo", "ultralytics"):
+        eval_model_type = "yolo"
+        for name in os.listdir(output_dir):
+            if name.endswith('.onnx') and not name.endswith('_fp16.onnx'):
+                model_path = os.path.join(output_dir, name)
+                break
+
+    eval_script = os.path.join(_model_training_dir(), "eval_coco_multi.py")
+    if not os.path.exists(eval_script):
+        eval_script = os.path.join(os.getcwd(), "eval_coco_multi.py")
+
+    if not os.path.exists(eval_script):
+        return
+
+    log_file = os.path.join(os.path.dirname(output_dir), "evaluation_results.csv")
+
+    cmd = [
+        sys.executable,
+        eval_script,
+        "--model-path", str(model_path),
+        "--model-type", eval_model_type,
+        "--model-name", os.path.basename(output_dir),
+        "--resolution", str(image_size),
+        "--datasets"
+    ] + unique_datasets + [
+        "--log-file", log_file,
+    ]
+
+    try:
+        print(f"  Running post-training evaluation on {len(unique_datasets)} dataset(s)...")
+        subprocess.run(cmd, cwd=os.path.dirname(eval_script), check=False)
+    except Exception as e:
+        print(f"  Warning: Evaluation failed: {e}")

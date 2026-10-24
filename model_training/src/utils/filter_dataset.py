@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 
 import yaml
@@ -58,10 +59,20 @@ def filter_coco_dataset(config, output_dir, min_size=None):
     filtered_dir = Path(output_dir) / "filtered"
     filtered_dir.mkdir(parents=True, exist_ok=True)
 
+    # Remember the original annotation paths before the config is repointed at
+    # the filtered files, so they can be kept for evaluation.
+    original_annotations = {
+        f"{split}_annotations": ds_cfg[f"{split}_annotations"]
+        for split in ("train", "val", "test")
+        if f"{split}_annotations" in ds_cfg
+    }
+
     print(f"\nFiltering dataset (min box size {min_size}px)", "-"*50)
     for split in ("train", "val"):
         key = f"{split}_annotations"
-        src = os.path.join(root, ds_cfg[key])
+        src = os.path.join(root, original_annotations[key])
+        if not os.path.exists(src):
+            continue
         dst = filtered_dir / f"{split}_annotations.coco.json"
         stats = filter_split(src, dst, min_size)
         # Absolute, so joining it onto the dataset root later is a no-op.
@@ -76,6 +87,18 @@ def filter_coco_dataset(config, output_dir, min_size=None):
             f"{stats['images_before']} -> {stats['images_after']} images "
             f"(dropped {dropped_images} without detections)"
         )
+    # Save original annotations for evaluation if not already saved
+    try:
+        orig_dir = Path(output_dir) / "original"
+        orig_dir.mkdir(parents=True, exist_ok=True)
+        for key, path in original_annotations.items():
+            src = path if os.path.isabs(path) else os.path.join(root, path)
+            if os.path.exists(src):
+                dst = orig_dir / f"{key}.coco.json"
+                if not dst.exists():
+                    shutil.copy(src, dst)
+    except OSError as e:
+        print(f"  Warning: could not preserve original annotations: {e}")
     return config
 
 
