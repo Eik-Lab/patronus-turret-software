@@ -109,6 +109,12 @@ struct CommandConfig {
   uint16_t command_port_;    ///< UDP port to listen on for commands.
 };
 
+/// @brief Shoot controller configuration.
+struct ShootControllerConfig {
+  std::string port_{"/dev/ttyUSB0"};
+  std::string baud_rate_{"B9600"};
+};
+
 /// @brief Top-level system configuration.
 struct SystemConfig {
   std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
@@ -118,6 +124,7 @@ struct SystemConfig {
   PipelineConfig mono_;                      ///< Mono pipeline config.
   SensorConfig sensor_;                      ///< Sensor module config.
   CommandConfig command_;                    ///< UDP command listener config.
+  ShootControllerConfig shoot_controller_;   ///< Shoot controller config.
   CanBusConfig can_bus_;                     ///< Shared CAN bus settings.
   std::vector<GimbalConfig> gimbals_;        ///< Per-gimbal CAN + limits.
   std::vector<TrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.

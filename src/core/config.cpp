@@ -186,6 +186,13 @@ static CommandConfig read_command(GKeyFile *kf, const gchar *group) {
   return cfg;
 }
 
+static ShootControllerConfig read_shoot_controller(GKeyFile *kf, const gchar *group) {
+  ShootControllerConfig cfg;
+  cfg.port_ = read_string(kf, group, "port", "/dev/ttyUSB0");
+  cfg.baud_rate_ = read_string(kf, group, "baud_rate", "B9600");
+  return cfg;
+}
+
 SystemConfig load_config(const std::string &path) {
   SystemConfig sys;
 
@@ -219,6 +226,10 @@ SystemConfig load_config(const std::string &path) {
   // [commands]
   if (g_key_file_has_group(kf, "commands"))
     sys.command_ = read_command(kf, "commands");
+
+  // [shoot_controller]
+  if (g_key_file_has_group(kf, "shoot_controller"))
+    sys.shoot_controller_ = read_shoot_controller(kf, "shoot_controller");
 
   // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {

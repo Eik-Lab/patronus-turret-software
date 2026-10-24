@@ -10,8 +10,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <fcntl.h>
+#include <termios.h>
+
 #include <cmath>
 #include <cstring>
+#include <atomic>
+#include <string>
 
 namespace patronus::comm {
 
@@ -41,17 +46,64 @@ namespace {
     adjust_exposure(camera, exposure_step_factor);
   }
 
+  speed_t baud_string_to_speed(std::string_view baud_str) {
+    if (baud_str == "B9600") return B9600;
+    if (baud_str == "B19200") return B19200;
+    if (baud_str == "B38400") return B38400;
+    if (baud_str == "B57600") return B57600;
+    if (baud_str == "B115200") return B115200;
+    LOG(Warning, "Unsupported baud rate '" << baud_str << "', defaulting to B9600");
+    return B9600;
+  }
+
+  std::atomic<int> shoot_fd{-1};
+  std::atomic<bool> is_shooting{false};
+
+  void send_shoot_command(const std::string &command) {
+    int fd = shoot_fd.load();
+    if (fd < 0) {
+      LOG(Warning, "Shoot controller not connected");
+      return;
+    }
+
+    std::string cmd = command + "\n";
+    if (write(fd, cmd.c_str(), cmd.length()) < 0) {
+      LOG(Error, "Failed to write to shoot controller: " << std::strerror(errno));
+    }
+  }
+
 } // namespace
 
 void handleShoot() {
-  // send command to arduino, needs to initilize serial port.
-  /*   "safety-on": skru på safety
-  "safety-off": skru av safety
-  "fire": begynn å skyt
-  "hold": stopp å skyt */
+  if (is_shooting.load()) {
+    send_shoot_command("hold");
+    is_shooting.store(false);
+  } else {
+    send_shoot_command("fire");
+    is_shooting.store(true);
+  }
 }
 
-void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
+void runCommandThread(const std::string &host, uint16_t port,
+                     const std::string &shoot_port, const std::string &shoot_baud,
+                     std::atomic<bool> &running) {
+  // Open shoot controller serial port
+  int fd = open(shoot_port.c_str(), O_RDWR | O_NOCTTY);
+  if (fd >= 0) {
+    termios tty{};
+    tcgetattr(fd, &tty);
+    cfmakeraw(&tty);
+    speed_t baud = baud_string_to_speed(shoot_baud);
+    cfsetispeed(&tty, baud);
+    cfsetospeed(&tty, baud);
+    tty.c_cflag |= CS8 | CLOCAL | CREAD;
+    tcsetattr(fd, TCSANOW, &tty);
+    shoot_fd.store(fd);
+    LOG(Info, "Shoot controller: " << shoot_port);
+  } else {
+    LOG(Warning, "Shoot controller unavailable");
+  }
+
   int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
     LOG(Error, "CommandListener: Failed to create socket");
@@ -72,7 +124,7 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   timeval timeout{1, 0};
   setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
-  LOG(Info, "CommandListener: Listening for commands on " << host << ':' << port);
+  LOG(Info, "CommandListener: Listening on " << host << ':' << port);
 
   char buffer[1024];
   while (running.load()) {
@@ -99,6 +151,8 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
   }
 
   close(sockfd);
+  fd = shoot_fd.load();
+  if (fd >= 0) close(fd);
   LOG(Info, "CommandListener: Stopped");
 }
 

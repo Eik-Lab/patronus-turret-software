@@ -120,7 +120,8 @@ int main(int argc, char *argv[]) {
   if (cfg.command_.enabled_) {
     command_thread = std::thread([&]() {
       patronus::comm::runCommandThread(cfg.command_.command_host_, cfg.command_.command_port_,
-                                       running);
+                                       cfg.shoot_controller_.port_,
+                                       cfg.shoot_controller_.baud_rate_, running);
     });
   }
 
