@@ -8,12 +8,14 @@ dataset:
 model:
   type: dfine
   name: ustc-community/dfine-large-coco
+  num_denoising: 100
 
 training:
   output_dir: ./runs/dfine_large
   tensorboard_dir: ./runs/tensorboard/dfine_large
-  epochs: 25
+  epochs: 20
   batch_size: 4
+  eval_batch_size: 1
   gradient_accumulation_steps: 2
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -21,9 +23,11 @@ training:
   lr_scheduler_type: cosine
   optimizer: adamw_torch
   image_size: 640
-  num_workers: 4
+  num_workers: 12
+  dataloader_prefetch_factor: 2
   logging_steps: 10
   save_total_limit: 1
   seed: 42
   augment: true
   early_stopping_patience: 10
+  compile: false

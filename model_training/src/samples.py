@@ -25,10 +25,12 @@ class SampleGridCallback(TrainerCallback):
         logging_dir,
         id2label,
         score_threshold=0.3,
+        batch_size=4,
     ):
         self.image_processor = image_processor
         self.id2label = id2label
         self.score_threshold = score_threshold
+        self.batch_size = batch_size
         self.samples_dir = os.path.join(output_dir, "samples")
         os.makedirs(self.samples_dir, exist_ok=True)
         self.logging_dir = logging_dir
@@ -47,15 +49,20 @@ class SampleGridCallback(TrainerCallback):
         was_training = model.training
         model.eval()
         device = next(model.parameters()).device
-        inputs = self.image_processor(images=self.images, return_tensors="pt").to(device)
+        results = []
         with torch.no_grad():
-            outputs = model(**inputs)
-        target_sizes = torch.tensor(
-            [img.size[::-1] for img in self.images], device=device
-        )
-        results = self.image_processor.post_process_object_detection(
-            outputs, target_sizes=target_sizes, threshold=self.score_threshold
-        )
+            for start in range(0, len(self.images), self.batch_size):
+                images = self.images[start:start + self.batch_size]
+                inputs = self.image_processor(images=images, return_tensors="pt").to(device)
+                outputs = model(**inputs)
+                target_sizes = torch.tensor(
+                    [img.size[::-1] for img in images], device=device
+                )
+                results.extend(
+                    self.image_processor.post_process_object_detection(
+                        outputs, target_sizes=target_sizes, threshold=self.score_threshold
+                    )
+                )
         if was_training:
             model.train()
         return results

@@ -1,7 +1,9 @@
+import math
 import os
 import shutil
 from functools import partial
 from pathlib import Path
+from inspect import signature
 
 import onnx
 import torch
@@ -12,6 +14,11 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
 from src.data.dataset import build_datasets
 from src.export import export_fp16
@@ -109,10 +116,17 @@ class HFDetModel(Model):
         id2label = {i: name for i, (_, name) in enumerate(sorted(categories.items()))}
         label2id = {name: i for i, name in id2label.items()}
 
+        from transformers import AutoConfig
+        model_config = AutoConfig.from_pretrained(model_cfg["name"])
+        model_config.num_labels = len(id2label)
+        num_denoising = model_cfg.get("num_denoising")
+        if num_denoising is not None:
+            model_config.num_denoising = num_denoising
+        model_config.id2label = id2label
+        model_config.label2id = label2id
         model = AutoModelForObjectDetection.from_pretrained(
             model_cfg["name"],
-            id2label=id2label,
-            label2id=label2id,
+            config=model_config,
             ignore_mismatched_sizes=True,
         )
 
@@ -137,40 +151,63 @@ class HFDetModel(Model):
 
         os.environ["TENSORBOARD_LOGGING_DIR"] = train_cfg["tensorboard_dir"]
 
-        args = TrainingArguments(
-            output_dir=output_dir,
-            report_to=["tensorboard"],
-            num_train_epochs=train_cfg["epochs"],
-            per_device_train_batch_size=train_cfg["batch_size"],
-            per_device_eval_batch_size=train_cfg["batch_size"],
-            learning_rate=float(train_cfg["learning_rate"]),
-            weight_decay=float(train_cfg["weight_decay"]),
-            gradient_accumulation_steps=train_cfg.get(
-                "gradient_accumulation_steps", 1
-            ),
-            warmup_ratio=train_cfg.get("warmup_ratio", 0.0),
-            lr_scheduler_type=train_cfg.get("lr_scheduler_type", "linear"),
-            max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
-            optim=train_cfg.get("optimizer", "adamw_torch"),
-            dataloader_num_workers=train_cfg["num_workers"],
-            dataloader_persistent_workers=train_cfg["num_workers"] > 0,
-            logging_steps=train_cfg["logging_steps"],
-            save_total_limit=train_cfg.get("save_total_limit", 1),
-            seed=train_cfg["seed"],
-            data_seed=train_cfg["seed"],
-            full_determinism=train_cfg.get("deterministic", False),
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            eval_do_concat_batches=False,
-            bf16=use_bf16,
-            fp16=torch.cuda.is_available() and not use_bf16,
-            gradient_checkpointing=gc_requested and gc_supported,
-            gradient_checkpointing_kwargs={"use_reentrant": False},
-            load_best_model_at_end=False,
-            metric_for_best_model="map",
-            greater_is_better=True,
-            remove_unused_columns=False,
-        )
+        batch_size = train_cfg["batch_size"]
+        grad_accum = train_cfg.get("gradient_accumulation_steps", 1)
+        warmup_ratio = float(train_cfg.get("warmup_ratio", 0.0))
+        warmup_steps = int(train_cfg.get("warmup_steps", 0))
+        if warmup_steps == 0 and warmup_ratio > 0:
+            steps_per_epoch = math.ceil(len(train_dataset) / (batch_size * grad_accum))
+            warmup_steps = int(steps_per_epoch * train_cfg["epochs"] * warmup_ratio)
+
+        ta_kwargs = {
+            "output_dir": output_dir,
+            "report_to": ["tensorboard"],
+            "num_train_epochs": train_cfg["epochs"],
+            "per_device_train_batch_size": batch_size,
+            "per_device_eval_batch_size": train_cfg.get("eval_batch_size", batch_size),
+            "learning_rate": float(train_cfg["learning_rate"]),
+            "weight_decay": float(train_cfg["weight_decay"]),
+            "gradient_accumulation_steps": grad_accum,
+            "lr_scheduler_type": train_cfg.get("lr_scheduler_type", "linear"),
+            "max_grad_norm": train_cfg.get("max_grad_norm", 1.0),
+            "optim": train_cfg.get("optimizer", "adamw_torch"),
+            "dataloader_num_workers": train_cfg["num_workers"],
+            "dataloader_prefetch_factor": train_cfg.get("dataloader_prefetch_factor"),
+            "logging_steps": train_cfg["logging_steps"],
+            "save_total_limit": train_cfg.get("save_total_limit", 1),
+            "seed": train_cfg["seed"],
+            "data_seed": train_cfg["seed"],
+            "full_determinism": train_cfg.get("deterministic", False),
+            "eval_strategy": "epoch",
+            "save_strategy": "epoch",
+            "bf16": use_bf16,
+            "fp16": torch.cuda.is_available() and not use_bf16,
+            "gradient_checkpointing": gc_requested and gc_supported,
+            "load_best_model_at_end": False,
+            "metric_for_best_model": "map",
+            "greater_is_better": True,
+            "remove_unused_columns": False,
+        }
+        ta_sig = signature(TrainingArguments.__init__)
+        if "warmup_ratio" in ta_sig.parameters and "warmup_ratio" in train_cfg:
+            ta_kwargs["warmup_ratio"] = warmup_ratio
+        elif "warmup_steps" in ta_sig.parameters:
+            ta_kwargs["warmup_steps"] = warmup_steps
+        if "dataloader_persistent_workers" in ta_sig.parameters:
+            ta_kwargs["dataloader_persistent_workers"] = train_cfg["num_workers"] > 0
+        if "eval_do_concat_batches" in ta_sig.parameters:
+            ta_kwargs["eval_do_concat_batches"] = False
+        if "gradient_checkpointing_kwargs" in ta_sig.parameters and ta_kwargs.get("gradient_checkpointing"):
+            ta_kwargs["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+        args = TrainingArguments(**ta_kwargs)
+        if "LOCAL_RANK" not in os.environ:
+            args._n_gpu = 1
+
+        if train_cfg.get("compile", False):
+            try:
+                model = torch.compile(model)
+            except Exception as exc:
+                print(f"  torch.compile skipped: {exc}")
 
         trainer = Trainer(
             model=model,
