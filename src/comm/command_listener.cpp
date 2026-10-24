@@ -47,13 +47,8 @@ namespace {
   }
 
   speed_t baud_string_to_speed(std::string_view baud_str) {
-    if (baud_str == "B9600") return B9600;
-    if (baud_str == "B19200") return B19200;
-    if (baud_str == "B38400") return B38400;
-    if (baud_str == "B57600") return B57600;
     if (baud_str == "B115200") return B115200;
-    LOG(Warning, "Unsupported baud rate '" << baud_str << "', defaulting to B9600");
-    return B9600;
+    return B115200;
   }
 
   std::atomic<int> shoot_fd{-1};
@@ -75,13 +70,9 @@ namespace {
 } // namespace
 
 void handleShoot() {
-  if (is_shooting.load()) {
-    send_shoot_command("hold");
-    is_shooting.store(false);
-  } else {
     send_shoot_command("fire");
-    is_shooting.store(true);
-  }
+    sleep(1);
+    send_shoot_command("hold");
 }
 
 void runCommandThread(const std::string &host, uint16_t port,
