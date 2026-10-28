@@ -145,58 +145,86 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
     cfg.follow_gain_ = 5.0F;
   cfg.pan_offset_rad_ = read_float(kf, group, "pan_offset_rad", 0.0F);
   cfg.tilt_offset_rad_ = read_float(kf, group, "tilt_offset_rad", 0.0F);
+  cfg.camera_ = read_string(kf, group, "camera", "");
+  if (!cfg.camera_.empty() && cfg.camera_ != "rgb" && cfg.camera_ != "mono") {
+    LOG(Warning, "[" << group << "] camera=" << cfg.camera_
+                     << " is neither rgb nor mono — round-robin instead");
+    cfg.camera_.clear();
+  }
   return cfg;
 }
 
-static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
-  TrackingConfig cfg;
-  cfg.home_return_enabled_ = read_bool(kf, group, "home_return_enabled", true);
-  cfg.home_return_gain_ = read_float(kf, group, "home_return_gain", 2.0F);
+// Keys missing from the group keep their value in `base`, so a camera group
+// such as [tracking_1.mono] only needs the keys that differ from [tracking_1].
+static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group,
+                                    const TrackingConfig &base = {}) {
+  TrackingConfig cfg = base;
+  cfg.home_return_enabled_ = read_bool(kf, group, "home_return_enabled", cfg.home_return_enabled_);
+  cfg.home_return_gain_ = read_float(kf, group, "home_return_gain", cfg.home_return_gain_);
   if (cfg.home_return_gain_ <= 0.0F)
     cfg.home_return_gain_ = 2.0F;
-  cfg.home_tolerance_rad_ = read_float(kf, group, "home_tolerance_rad", 0.05F);
+  cfg.home_tolerance_rad_ = read_float(kf, group, "home_tolerance_rad", cfg.home_tolerance_rad_);
   if (cfg.home_tolerance_rad_ <= 0.0F)
     cfg.home_tolerance_rad_ = 0.05F;
-  cfg.home_return_delay_ms_ =
-    static_cast<int>(read_uint<uint16_t>(kf, group, "home_return_delay_ms", 500));
-  cfg.home_return_max_velocity_ = read_float(kf, group, "home_return_max_velocity", 1.5F);
+  cfg.home_return_delay_ms_ = static_cast<int>(read_uint<uint16_t>(
+    kf, group, "home_return_delay_ms", static_cast<uint16_t>(cfg.home_return_delay_ms_)));
+  cfg.home_return_max_velocity_ =
+    read_float(kf, group, "home_return_max_velocity", cfg.home_return_max_velocity_);
   if (cfg.home_return_max_velocity_ <= 0.0F)
     cfg.home_return_max_velocity_ = 1.5F;
 
-  cfg.filter_enabled_ = read_bool(kf, group, "filter_enabled", true);
-  cfg.filter_meas_sigma_px_ = read_float(kf, group, "filter_meas_sigma_px", 8.0F);
+  cfg.filter_enabled_ = read_bool(kf, group, "filter_enabled", cfg.filter_enabled_);
+  cfg.filter_meas_sigma_px_ =
+    read_float(kf, group, "filter_meas_sigma_px", cfg.filter_meas_sigma_px_);
   if (cfg.filter_meas_sigma_px_ <= 0.0F)
     cfg.filter_meas_sigma_px_ = 8.0F;
-  cfg.filter_q_jerk_ = read_float(kf, group, "filter_q_jerk", 2.0e5F);
+  cfg.filter_q_jerk_ = read_float(kf, group, "filter_q_jerk", cfg.filter_q_jerk_);
   if (cfg.filter_q_jerk_ < 0.0F)
     cfg.filter_q_jerk_ = 2.0e5F;
-  cfg.filter_gate_ = read_float(kf, group, "filter_gate", 9.21F);
+  cfg.filter_gate_ = read_float(kf, group, "filter_gate", cfg.filter_gate_);
   if (cfg.filter_gate_ <= 0.0F)
     cfg.filter_gate_ = 9.21F;
-  cfg.filter_tick_ms_ = static_cast<int>(read_uint<uint16_t>(kf, group, "filter_tick_ms", 10));
+  cfg.filter_tick_ms_ = static_cast<int>(
+    read_uint<uint16_t>(kf, group, "filter_tick_ms", static_cast<uint16_t>(cfg.filter_tick_ms_)));
   if (cfg.filter_tick_ms_ <= 0)
     cfg.filter_tick_ms_ = 10;
   cfg.filter_pipeline_latency_ms_ =
-    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms", 20));
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms",
+                                         static_cast<uint16_t>(cfg.filter_pipeline_latency_ms_)));
   cfg.filter_pipeline_latency_ms_ = std::max(cfg.filter_pipeline_latency_ms_, 0);
-  cfg.filter_max_lead_ms_ =
-    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_lead_ms", 250));
+  cfg.filter_max_lead_ms_ = static_cast<int>(read_uint<uint16_t>(
+    kf, group, "filter_max_lead_ms", static_cast<uint16_t>(cfg.filter_max_lead_ms_)));
   cfg.filter_max_lead_ms_ = std::max(cfg.filter_max_lead_ms_, 0);
   cfg.filter_actuation_latency_ms_ =
-    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_actuation_latency_ms", 0));
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_actuation_latency_ms",
+                                         static_cast<uint16_t>(cfg.filter_actuation_latency_ms_)));
   cfg.filter_actuation_latency_ms_ = std::max(cfg.filter_actuation_latency_ms_, 0);
-  cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
+  cfg.filter_conf_noise_scale_ =
+    read_float(kf, group, "filter_conf_noise_scale", cfg.filter_conf_noise_scale_);
   if (cfg.filter_conf_noise_scale_ < 0.0F)
     cfg.filter_conf_noise_scale_ = 10.0F;
-  cfg.filter_max_coast_ms_ =
-    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_coast_ms", 1000));
+  cfg.filter_max_coast_ms_ = static_cast<int>(read_uint<uint16_t>(
+    kf, group, "filter_max_coast_ms", static_cast<uint16_t>(cfg.filter_max_coast_ms_)));
 
-  cfg.kp_ = read_float(kf, group, "kp", 0.006F);
+  cfg.kp_ = read_float(kf, group, "kp", cfg.kp_);
   if (cfg.kp_ < 0.0F)
     cfg.kp_ = 0.006F;
-  cfg.kd_ = read_float(kf, group, "kd", 0.0F);
-  cfg.lead_gain_ = read_float(kf, group, "lead_gain", 0.0F);
+  cfg.kd_ = read_float(kf, group, "kd", cfg.kd_);
+  cfg.lead_gain_ = read_float(kf, group, "lead_gain", cfg.lead_gain_);
   return cfg;
+}
+
+// [<group>] holds what the gimbal does whichever camera it tracks from;
+// [<group>.rgb] and [<group>.mono] override it for that camera (gains and
+// filter noise are in pixels, so they depend on the focal length).
+static GimbalTrackingConfig read_gimbal_tracking(GKeyFile *kf, const std::string &group) {
+  const TrackingConfig base =
+    g_key_file_has_group(kf, group.c_str()) ? read_tracking(kf, group.c_str()) : TrackingConfig{};
+  const auto overlay = [&](const char *camera) {
+    const std::string sub = group + "." + camera;
+    return g_key_file_has_group(kf, sub.c_str()) ? read_tracking(kf, sub.c_str(), base) : base;
+  };
+  return GimbalTrackingConfig{.rgb_ = overlay("rgb"), .mono_ = overlay("mono")};
 }
 
 static SensorConfig read_sensor(GKeyFile *kf, const gchar *group) {
@@ -280,10 +308,7 @@ SystemConfig load_config(const std::string &path) {
     const uint16_t fallback_tilt = static_cast<uint16_t>(fallback_pan + 2);
     sys.gimbals_.push_back(read_gimbal(kf, can_group, fallback_pan, fallback_tilt));
 
-    if (g_key_file_has_group(kf, trk_group))
-      sys.tracking_cfg_.push_back(read_tracking(kf, trk_group));
-    else
-      sys.tracking_cfg_.push_back(TrackingConfig{});
+    sys.tracking_cfg_.push_back(read_gimbal_tracking(kf, trk_group));
   }
 
   // Legacy single-gimbal: [can] + [tracking]
@@ -294,10 +319,7 @@ SystemConfig load_config(const std::string &path) {
       sys.gimbals_.push_back(GimbalConfig{});
     }
 
-    if (g_key_file_has_group(kf, "tracking"))
-      sys.tracking_cfg_.push_back(read_tracking(kf, "tracking"));
-    else
-      sys.tracking_cfg_.push_back(TrackingConfig{});
+    sys.tracking_cfg_.push_back(read_gimbal_tracking(kf, "tracking"));
   }
 
   // A follower must name another gimbal that tracks from its own camera;

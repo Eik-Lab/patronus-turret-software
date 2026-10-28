@@ -81,6 +81,11 @@ struct GimbalConfig {
   float follow_gain_{5.0f};     ///< Follower P-gain, rad/s per rad of bearing error.
   float pan_offset_rad_{0.0f};  ///< Follower pan home minus leader pan home, when aligned.
   float tilt_offset_rad_{0.0f}; ///< Follower tilt home minus leader tilt home, when aligned.
+
+  /// Camera a leader tracks from: "rgb", "mono", or empty to round-robin the
+  /// active pipelines across leaders. Falls back to the other pipeline when the
+  /// named one is not running.
+  std::string camera_;
 };
 
 /// @brief Tracking loop configuration for a single gimbal.
@@ -132,6 +137,13 @@ struct TrackingConfig {
   float lead_gain_{0.0f}; ///< Lead term on filtered velocity (s).
 };
 
+/// @brief Tracking config of one gimbal for each camera it can track from:
+/// [tracking_N] overlaid with [tracking_N.rgb] or [tracking_N.mono].
+struct GimbalTrackingConfig {
+  TrackingConfig rgb_;
+  TrackingConfig mono_;
+};
+
 /// @brief Shared CAN bus settings (apply to all gimbals on the bus).
 struct CanBusConfig {
   uint8_t datarate_{1};       ///< 1, 2, 5, or 8 Mbps.
@@ -160,17 +172,17 @@ struct TelemetryConfig {
 
 /// @brief Top-level system configuration.
 struct SystemConfig {
-  std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
-  bool tracking_{false};                     ///< Enable tracking loop.
-  std::string log_level_{"warning"};         ///< Min level: debug, info, warning, error, critical.
-  PipelineConfig rgb_;                       ///< RGB pipeline config.
-  PipelineConfig mono_;                      ///< Mono pipeline config.
-  SensorConfig sensor_;                      ///< Sensor module config.
-  CommandConfig command_;                    ///< UDP command listener config.
-  TelemetryConfig telemetry_;                ///< Tracking telemetry logs.
-  CanBusConfig can_bus_;                     ///< Shared CAN bus settings.
-  std::vector<GimbalConfig> gimbals_;        ///< Per-gimbal CAN + limits.
-  std::vector<TrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.
+  std::string mode_{"both"};          ///< Pipeline mode: "both", "rgb", or "mono".
+  bool tracking_{false};              ///< Enable tracking loop.
+  std::string log_level_{"warning"};  ///< Min level: debug, info, warning, error, critical.
+  PipelineConfig rgb_;                ///< RGB pipeline config.
+  PipelineConfig mono_;               ///< Mono pipeline config.
+  SensorConfig sensor_;               ///< Sensor module config.
+  CommandConfig command_;             ///< UDP command listener config.
+  TelemetryConfig telemetry_;         ///< Tracking telemetry logs.
+  CanBusConfig can_bus_;              ///< Shared CAN bus settings.
+  std::vector<GimbalConfig> gimbals_; ///< Per-gimbal CAN + limits.
+  std::vector<GimbalTrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.
 };
 
 /// @brief Load system configuration from a GLib-format .ini file.
