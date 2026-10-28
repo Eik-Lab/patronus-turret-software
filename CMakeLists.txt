@@ -15,8 +15,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# NVIDIA Jetson AGX Thor (Blackwell, sm_11.0) Use 'native' for auto-detection,
-# or set explicitly for cross-compilation: -DCMAKE_CUDA_ARCHITECTURES=110
+# Jetson AGX Thor is Blackwell, sm_11.0. Override with
+# -DCMAKE_CUDA_ARCHITECTURES=native to build for the local GPU instead.
 if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_ARCHITECTURES
       110

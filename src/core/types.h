@@ -2,16 +2,18 @@
 
 namespace patronus::core {
 
-/// @brief 2D point in normalised sensor-frame coordinates.
+/// A pixel-space position or vector: detection centres, aim errors and
+/// velocities all use it.
 struct Point {
-  float cx_; ///< Horizontal centre [0, sensor_width].
-  float cy_; ///< Vertical centre [0, sensor_height].
+  float cx_; ///< Positive right.
+  float cy_; ///< Positive down.
 };
 
-/// @brief Pan/tilt aim angles in radians.
+/// A pan/tilt pair. The units belong to whoever produced it: the sensor
+/// control law emits normalised [-1, 1] commands, the weapon solution degrees.
 struct AimAngles {
-  float pan_;  ///< Horizontal angle (positive = right).
-  float tilt_; ///< Vertical angle (positive = down).
+  float pan_;  ///< Positive right.
+  float tilt_; ///< Positive down.
 };
 
 } // namespace patronus::core

@@ -7,21 +7,15 @@
 
 namespace patronus::comm {
 
-/// @brief Sensor data read from the serial port.
 struct SensorData {
-  float distance = 0.0F;
-  double latitude = 0.0;
+  float distance = 0.0F; ///< cm
+  double latitude = 0.0; ///< Signed decimal degrees.
   double longitude = 0.0;
   bool has_distance = false;
   bool has_gps = false;
 };
 
-/// @brief Run sensor data reading loop (intended for std::thread).
-///        Logs each received distance/GPS packet. Exits when `running`
-///        goes false or a read error occurs.
-/// @param port     Serial port path (e.g., "/dev/ttyACM0").
-/// @param baud_str Baud rate string (e.g., "B115200").
-/// @param running  Atomic flag controlling loop termination.
+/// The readings are only logged so far.
 void run_sensor_thread(const std::string &port, const std::string &baud_str,
                        std::atomic<bool> &running);
 

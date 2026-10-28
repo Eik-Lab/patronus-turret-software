@@ -38,98 +38,71 @@ namespace {
   constexpr int k_pgie_class_id_drone = 0;
   constexpr guint k_muxer_batch_timeout_usec = 40000;
 
-  /// A prediction older than this is not drawn.
-  ///
-  /// The tracking tick is ~10 ms and the frame rate is 30/40 fps, so a live sample
-  /// is at most ~35 ms old. This bound covers the failure case: a tracking thread
-  /// that has died, or a gimbal no longer aiming, must not leave a frozen marker on
-  /// the stream implying the estimate is still being maintained.
+  /// Only reached if a tracking thread dies; avoids a frozen marker.
   constexpr double k_prediction_max_age_s = 0.25;
 
-  /// Furthest the overlay carries an estimate forward to the frame being drawn.
-  /// Normally one frame interval; bounded so a stalled tracking thread cannot
-  /// send the marker sliding across the screen.
   constexpr double k_max_extrapolation_s = 0.1;
 
-  /// Frame intervals within this fraction of the running average are treated as
-  /// the camera's nominal period, and snapped to it.
+  /// Frame-period snapping, see advance_capture_clock().
   constexpr double k_period_tolerance = 0.25;
   constexpr double k_period_smoothing = 0.05;
-  /// Consecutive off-period intervals before the average is re-learned.
   constexpr int k_period_relearn_frames = 5;
   constexpr double k_max_frame_interval_s = 0.5;
 
-  /// A frame that took longer than this to reach the probe is assumed to carry a
-  /// PTS on some other base, and its capture time is reported as unavailable.
+  /// Older than this, the PTS is assumed to be on another clock base.
   constexpr double k_max_capture_age_s = 1.0;
 
-  /// Usable USB 3 link rate of the ace 2 cameras, bytes/s. With
-  /// `GrabStrategy_LatestImageOnly` frames do not queue, so once exposure ends the
-  /// frame reaches the host after roughly its size over this rate.
+  /// Usable USB 3 rate of the ace 2 cameras, for estimating readout time.
   constexpr double k_usb3_bytes_per_s = 360.0e6;
 
-  /// How often the probe re-reads the exposure time, which auto exposure and the
-  /// operator's exposure commands both change, seconds.
+  /// GenICam reads are too slow for every frame.
   constexpr double k_exposure_refresh_s = 1.0;
 
-  // Overlay geometry, in muxed pixels. Sizes and colours mirror kalman-cpp's
-  // apps/video_track so the two renderings can be compared side by side.
+  // Muxed pixels. Matches kalman-cpp's video_track for side-by-side comparison.
   constexpr unsigned int k_prediction_radius_px = 10U;
   constexpr unsigned int k_prediction_width_px = 3U;
   constexpr unsigned int k_detection_radius_px = 8U;
   constexpr unsigned int k_velocity_width_px = 2U;
   constexpr float k_ellipse_sigmas = 3.0F;
-  /// nvdsosd has no ellipse primitive, so the ellipse is a closed polyline.
   constexpr int k_ellipse_segments = 24;
   constexpr float k_two_pi = 6.2831853F;
 
   enum class Camera { Rgb, Mono };
 
-  /// Per-camera state the OSD probe needs. Passed to the probe as `u_data` rather
-  /// than recovered from `frame_meta->source_id`: each camera is its own pipeline
-  /// with `batch-size 1`, so every source_id in both pipelines is 0.
+  /// Passed to the probe as u_data: source_id is 0 in both pipelines.
   struct CameraContext {
     const config::PipelineConfig *config{nullptr};
     core::LatestValue<core::FrameObservation> *output{nullptr};
     const tracking::PredictionChannel *predictions{nullptr};
     GMainLoop *loop{nullptr};
 
-    /// This camera's `pylonsrc` element, published while the pipeline is up so the
-    /// command thread can reach the camera, withdrawn before teardown. Null when
-    /// the pipeline is not running.
+    /// For the command thread. Null while the pipeline is down.
     GstElement *source{nullptr};
     std::mutex source_mutex;
 
-    // --- Per-frame state, touched only by this camera's streaming thread ---
+    // Streaming thread only.
 
     uint64_t frame_id{0};
     double last_arrival_s{0.0};
     GstClockTime last_pts{GST_CLOCK_TIME_NONE};
-    /// De-jittered capture clock and the frame period it advances by.
     double capture_s{0.0};
     double period_s{0.0};
     int off_period_frames{0};
     bool logged_capture_age{false};
 
-    /// Readout and transfer time after exposure, seconds. Set before PLAYING.
-    double readout_s{0.0};
-    /// Current exposure time, seconds, refreshed every `k_exposure_refresh_s`.
+    double readout_s{0.0}; ///< Set before PLAYING.
     double exposure_s{0.0};
     double next_exposure_refresh_s{0.0};
   };
 
   CameraContext g_ctx[2];
 
-  /// Publish this camera's `pylonsrc` element, or withdraw it again by passing
-  /// nullptr before the element is destroyed. Guarded by `source_mutex`.
   void set_source(CameraContext &ctx, GstElement *source) {
     const std::scoped_lock lock(ctx.source_mutex);
     ctx.source = source;
   }
 
-  /// Set a pylonsrc child property ("cam::..." or "stream::...") from its string
-  /// form, as gst-launch would. Logs and carries on when the camera has no such
-  /// property: a missing tweak must not stop the pipeline.
+  /// A missing property is logged, not fatal.
   void set_child_arg(GstElement *source, const char *name, const std::string &value) {
     GObject *target = nullptr;
     GParamSpec *pspec = nullptr;
@@ -142,8 +115,7 @@ namespace {
     LOG(Info, "pylonsrc " << name << " = " << value);
   }
 
-  /// Current exposure time of this camera, seconds, or 0.0 when the camera is not
-  /// reachable. A GenICam read over USB: call it rarely, not per frame.
+  /// A GenICam read over USB: call rarely.
   double read_exposure_s(CameraContext &ctx) {
     const std::scoped_lock lock(ctx.source_mutex);
     if (ctx.source == nullptr)
@@ -157,8 +129,6 @@ namespace {
     return (exposure_us > 0.0) ? exposure_us * 1.0e-6 : 0.0;
   }
 
-  /// Readout and transfer time of one frame: `readout_ms` if configured, else
-  /// the frame's bytes, from the source caps, over the USB 3 link rate.
   double readout_time_s(const config::PipelineConfig &config) {
     if (config.readout_ms_ > 0.0F)
       return static_cast<double>(config.readout_ms_) * 1.0e-3;
@@ -174,8 +144,6 @@ namespace {
       const gchar *format = gst_structure_get_string(s, "format");
       if (gst_structure_get_int(s, "width", &width) &&
           gst_structure_get_int(s, "height", &height)) {
-        // Bytes per pixel of the formats the cameras are run in; anything packed
-        // wider than 8 bits is treated as two bytes.
         double bpp = 2.0;
         if (format != nullptr && (g_str_equal(format, "GRAY8") != FALSE))
           bpp = 1.0;
@@ -189,9 +157,7 @@ namespace {
     return bytes / k_usb3_bytes_per_s;
   }
 
-  /// Scale the live camera's exposure by `factor`, clamped to [min_us, max_us].
-  /// Reached through the running pipeline's own node map: a second Pylon handle on
-  /// an already-open device fails.
+  /// A second Pylon handle on an open device fails, so go through pylonsrc.
   void adjust_exposure(Camera camera, double factor, double min_us, double max_us) {
     CameraContext &ctx = g_ctx[static_cast<int>(camera)];
     const std::scoped_lock lock(ctx.source_mutex);
@@ -202,8 +168,7 @@ namespace {
     if (cam == nullptr)
       return;
 
-    // ExposureTime is a GenICam float node, exposed by pylonsrc as a gdouble property.
-    // Passing any other type through the varargs get/set silently corrupts the value.
+    // Must be a gdouble: varargs get/set silently corrupts any other type.
     gdouble current_us = 0.0;
     g_object_get(cam, "ExposureTime", &current_us, nullptr);
     const gdouble target_us = std::clamp(current_us * factor, min_us, max_us);
@@ -220,12 +185,8 @@ namespace {
   constexpr NvOSD_ColorParams k_colour_detection{0.0, 1.0, 0.0, 1.0};   // green
   constexpr NvOSD_ColorParams k_colour_white{1.0, 1.0, 1.0, 1.0};
 
-  /// Accumulates overlay primitives, rolling over into a fresh display meta
-  /// whenever one of the fixed-size arrays fills up.
-  ///
-  /// MAX_ELEMENTS_IN_DISPLAY_META is small (16). A single gimbal's uncertainty
-  /// ellipse alone is more line segments than one meta holds. The arrays are
-  /// independent, so the rollover check is per primitive type.
+  /// MAX_ELEMENTS_IN_DISPLAY_META is 16, fewer than one ellipse needs, so this
+  /// rolls over to a fresh display meta when an array fills.
   class OsdWriter {
   public:
     OsdWriter(NvDsBatchMeta *batch, NvDsFrameMeta *frame) : batch_(batch), frame_(frame) {
@@ -262,7 +223,6 @@ namespace {
       arrow.arrow_color = colour;
     }
 
-    /// @param filled Fill the disc with `colour` instead of drawing only its outline.
     void add_circle(float cx, float cy, unsigned int radius, unsigned int thickness,
                     const NvOSD_ColorParams &colour, bool filled) {
       NvDsDisplayMeta *meta =
@@ -279,10 +239,7 @@ namespace {
       circle.circle_width = thickness;
     }
 
-    /// @param text Copied onto the heap. DeepStream owns `display_text` and frees it
-    ///             when the meta is released, so it must never be a string literal or
-    ///             a static buffer. `font_name` is the opposite case: it is only read,
-    ///             so a literal is correct there.
+    /// DeepStream frees display_text, so it must be heap-allocated.
     void add_text(const char *text, float x, float y, unsigned int font_size,
                   const NvOSD_ColorParams &colour) {
       NvDsDisplayMeta *meta =
@@ -301,20 +258,13 @@ namespace {
     }
 
   private:
-    /// Return `current_` if it still has room at `used`, otherwise acquire a new
-    /// meta. Returns nullptr when the pool is exhausted, in which case the caller
-    /// drops the primitive rather than writing through a null pointer.
     NvDsDisplayMeta *reserve(guint used) {
       if (current_ != nullptr && used < MAX_ELEMENTS_IN_DISPLAY_META)
         return current_;
       NvDsDisplayMeta *meta = nvds_acquire_display_meta_from_pool(batch_);
       if (meta == nullptr)
         return nullptr;
-      // The pool hands back *recycled* metas with their counts intact — DeepStream's
-      // own plugins always assign num_rects/num_labels rather than incrementing
-      // (gstnvdspreprocess.cpp does `display_meta->num_rects = 1`). Trusting a stale
-      // count here indexes past the end of the fixed-size arrays and corrupts the
-      // heap, so every count starts from zero.
+      // Recycled metas keep their old counts; trusting them corrupts the heap.
       meta->num_rects = 0;
       meta->num_labels = 0;
       meta->num_lines = 0;
@@ -330,16 +280,14 @@ namespace {
     NvDsDisplayMeta *current_{nullptr};
   };
 
-  /// A published prediction carried forward to the frame being drawn.
   struct Projected {
     tracking::PredictionSample sample;
     float u_norm{0.0F}; ///< Estimated centre at the drawn frame, normalised.
     float v_norm{0.0F};
   };
 
-  /// Read a gimbal's prediction and move it to `now_s`. The filter's estimate is
-  /// for the frame it last processed, normally the one before this; the target
-  /// has since moved through the image by its own velocity plus the camera's.
+  /// The estimate is from the previous frame; move it by target plus camera
+  /// velocity to this one.
   std::optional<Projected> project_prediction(const tracking::PredictionChannel &predictions,
                                               size_t gimbal, double now_s) {
     const auto sample = predictions.get(gimbal);
@@ -357,17 +305,8 @@ namespace {
     return out;
   }
 
-  /// Draw the target-filter predictions published by this camera's tracking thread, the way
-  /// kalman-cpp's video_track draws them: a red ring on the estimate, a blue
-  /// velocity arrow, a yellow 3-sigma uncertainty ellipse, and a green dot on the
-  /// detection the filter accepted.
-  ///
-  /// Positions arrive normalised to the detection frame, so the only conversion
-  /// here is normalised -> muxed pixels. That is correct only while the detection
-  /// frame and the muxed frame cover the same field of view; if
-  /// `detection_width`/`detection_height` describe a cropped or letterboxed
-  /// sub-rectangle of the muxed frame, the overlay is offset by the same amount the
-  /// aim error is. The two therefore cannot silently disagree.
+  /// Red ring: estimate. Blue arrow: velocity. Yellow: 3-sigma ellipse.
+  /// Green dot: accepted detection.
   void draw_predictions(OsdWriter &osd, const CameraContext &ctx, double now_s) {
     if (ctx.predictions == nullptr || ctx.config == nullptr || !ctx.config->draw_predictions_)
       return;
@@ -378,8 +317,7 @@ namespace {
     if (width <= 1.0F || height <= 1.0F)
       return;
 
-    // A coasting estimate can drift to the edge and its ellipse can outgrow the
-    // frame; nvdsosd is handed only coordinates that lie inside the surface.
+    // nvdsosd must only get coordinates inside the surface.
     const float max_x = width - 1.0F;
     const float max_y = height - 1.0F;
 
@@ -389,7 +327,6 @@ namespace {
         continue;
       const tracking::PredictionSample &sample = projected->sample;
 
-      // Accepted detection. Drawn first so the prediction ring sits on top of it.
       if (sample.measured) {
         const float det_x = sample.detection_u_norm * width;
         const float det_y = sample.detection_v_norm * height;
@@ -397,24 +334,19 @@ namespace {
           osd.add_circle(det_x, det_y, k_detection_radius_px, 1U, k_colour_detection, true);
       }
 
-      // An estimate that has coasted out of view is pinned to the frame edge
-      // rather than hidden, so a lost track still reads as one.
+      // Pinned to the edge rather than hidden, so a lost track still shows.
       const float cx = std::clamp(projected->u_norm * width, 0.0F, max_x);
       const float cy = std::clamp(projected->v_norm * height, 0.0F, max_y);
 
       osd.add_circle(cx, cy, k_prediction_radius_px, k_prediction_width_px, k_colour_prediction,
                      false);
 
-      // Velocity arrow: the target's own motion over the look-ahead horizon, with
-      // the camera's motion removed. This is the same constant-velocity prediction
-      // the control law's lead term performs.
       const float lead_s = cfg.prediction_lead_s_;
       const float tip_x = std::clamp(cx + (sample.vu_norm_s * lead_s * width), 0.0F, max_x);
       const float tip_y = std::clamp(cy + (sample.vv_norm_s * lead_s * height), 0.0F, max_y);
       if (std::abs(tip_x - cx) >= 1.0F || std::abs(tip_y - cy) >= 1.0F)
         osd.add_arrow(cx, cy, tip_x, tip_y, k_velocity_width_px, k_colour_velocity);
 
-      // Axis-aligned 3-sigma ellipse from the filter's own position covariance.
       const float radius_x = k_ellipse_sigmas * sample.sigma_u_norm * width;
       const float radius_y = k_ellipse_sigmas * sample.sigma_v_norm * height;
       if (radius_x >= 1.0F && radius_y >= 1.0F) {
@@ -433,13 +365,9 @@ namespace {
     }
   }
 
-  /// Advance this camera's capture clock by one frame and return the interval.
-  ///
-  /// The interval comes from the buffer PTS where there is one, since that is the
-  /// camera's cadence rather than when inference happened to finish. Either way
-  /// it is then snapped to the running frame period: a free-running camera's true
-  /// interval is constant, and whatever jitter is left in the stamps would
-  /// otherwise be divided into the filter's velocity estimate.
+  /// The interval comes from the PTS and is snapped to the running period:
+  /// a free-running camera's interval is constant, and stamp jitter would
+  /// become velocity noise in the filter.
   double advance_capture_clock(CameraContext &ctx, GstClockTime pts, double arrival_s) {
     double interval = 0.0;
     if (ctx.last_arrival_s > 0.0) {
@@ -455,7 +383,6 @@ namespace {
     ctx.last_pts = pts;
 
     if (interval <= 0.0 || interval > k_max_frame_interval_s) {
-      // First frame, or a gap long enough that the previous frame is unrelated.
       ctx.capture_s = arrival_s;
       ctx.period_s = 0.0;
       ctx.off_period_frames = 0;
@@ -469,7 +396,7 @@ namespace {
       ctx.off_period_frames = 0;
       interval = ctx.period_s;
     } else if (++ctx.off_period_frames >= k_period_relearn_frames) {
-      // Not a dropped frame but a new frame rate.
+      // A new frame rate, not a dropped frame.
       ctx.period_s = interval;
       ctx.off_period_frames = 0;
     }
@@ -478,17 +405,9 @@ namespace {
     return interval;
   }
 
-  /// When a frame was captured (the middle of its exposure), on the steady clock.
-  ///
-  /// pylonsrc stamps the PTS in running time when it retrieves the frame, so on
-  /// the pipeline clock the frame arrived at `base_time + pts`. Its age is
-  /// measured on that clock and subtracted from the steady-clock arrival, so the
-  /// two clocks never have to share an origin. The image itself is older than
-  /// that by the readout and transfer plus half the exposure, which is the part
-  /// that matters to a gimbal turning while the frame is in flight.
-  ///
-  /// @return Capture time in `steady_now_s()` seconds, or 0.0 when the PTS or
-  ///         clock is unavailable or the age is implausible.
+  /// Mid-exposure time in steady_now_s() seconds, or 0.0 if unknown. The
+  /// frame's age is measured on the pipeline clock, so the two clocks never
+  /// need a common origin.
   double captured_at(GstClockTime clock_now, GstClockTime base_time, GstClockTime pts,
                      double arrival_s, double before_retrieval_s) {
     if (!GST_CLOCK_TIME_IS_VALID(clock_now) || !GST_CLOCK_TIME_IS_VALID(base_time) ||
@@ -503,14 +422,8 @@ namespace {
     return arrival_s - age_s - before_retrieval_s;
   }
 
-  /// OSD probe: publish what this frame showed to the tracking loop and draw the
-  /// filter's prediction. `u_data` is this pipeline's `CameraContext`.
-  ///
-  /// One `FrameObservation` goes out per frame, detection or not, because the
-  /// filter steps once per frame. Of the frame's drone detections only the most
-  /// confident is forwarded, as kalman-cpp's video_track does: the filter tracks
-  /// one target, and handing it every box in turn has it chasing whichever came
-  /// last.
+  /// Only the most confident detection is forwarded: the filter tracks one
+  /// target.
   GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer u_data) {
     auto *ctx = static_cast<CameraContext *>(u_data);
 
@@ -528,7 +441,6 @@ namespace {
     }
     const double before_retrieval_s = ctx->readout_s + (0.5 * ctx->exposure_s);
 
-    // Pipeline clock now and base time, to turn each frame's PTS into its age.
     GstClockTime clock_now = GST_CLOCK_TIME_NONE;
     GstClockTime base_time = GST_CLOCK_TIME_NONE;
     if (GstElement *element = gst_pad_get_parent_element(pad); element != nullptr) {
@@ -622,16 +534,7 @@ namespace {
     return TRUE;
   }
 
-  /// Build the element graph, link it, and install the OSD probe.
-  ///
-  /// Split out of `run_pipeline` so every failure path is a plain `return` rather
-  /// than a `goto`: the cleanup needed on the error paths (partially-constructed
-  /// elements, the bus watch, the resolved config path) overlaps heavily with the
-  /// success path, and `goto` across the initialisations that follow is exactly the
-  /// pattern that skips a release and leaks the CAN bus wide open.
-  ///
-  /// @return The PLAYING pipeline, or nullptr on any failure. On failure nothing
-  ///         is left running and every resource taken here is released.
+  /// Every failure returns through `fail`, which releases what was taken.
   GstElement *build_and_run(Camera camera, const config::PipelineConfig &config, GMainLoop *loop,
                             CameraContext *ctx) {
     gboolean yaml_config = FALSE;
@@ -639,11 +542,9 @@ namespace {
     GstBus *bus = nullptr;
     guint bus_watch_id = 0U;
 
-    // Resolve infer_config to an absolute path so DeepStream resolves
-    // model-engine-file / onnx-file relative to the config file's directory.
+    // Absolute, so DeepStream resolves the model paths relative to it.
     char *infer_config_abs = realpath(config.infer_config_.c_str(), nullptr);
-    // Parenthesised to call the functions: glib >= 2.76 also defines these as
-    // macros that assign inside an `if`, which clang-tidy rejects in our code.
+    // Parenthesised: glib >= 2.76 also defines these as macros clang-tidy rejects.
     yaml_config = (infer_config_abs != nullptr) && ((g_str_has_suffix)(infer_config_abs, ".yml") ||
                                                     (g_str_has_suffix)(infer_config_abs, ".yaml"));
 
@@ -722,7 +623,6 @@ namespace {
       return fail(pipeline);
     }
 
-    // One camera per pipeline, so the muxer batch is a single source.
     g_object_set(G_OBJECT(streammux), "batch-size", static_cast<guint>(1), "width",
                  config.muxer_width_, "height", config.muxer_height_, "live-source", TRUE,
                  "batched-push-timeout", k_muxer_batch_timeout_usec, nullptr);
@@ -751,8 +651,6 @@ namespace {
                      udp_sink, nullptr);
     LOG(Debug, "Added elements to bin");
 
-    // The muxer sink pad is requested rather than statically linked: nvstreammux
-    // only exposes it once the pipeline has a sink.
     GstPad *sinkpad = gst_element_request_pad_simple(streammux, "sink_0");
     if (sinkpad == nullptr) {
       LOG(Error, "Streammux request sink pad failed. Exiting.");
@@ -797,10 +695,6 @@ namespace {
     return pipeline;
   }
 
-  /// Shared pipeline body. Both cameras are byte-for-byte identical apart from
-  /// their configuration and their slot in the file-scope context array, which is
-  /// why the two public entry points are thin wrappers rather than the duplicated
-  /// 300-line files this replaces.
   int run_pipeline(Camera camera, const config::PipelineConfig &config,
                    core::LatestValue<core::FrameObservation> &output,
                    tracking::PredictionChannel &predictions) {
@@ -826,7 +720,7 @@ namespace {
     g_main_loop_run(loop);
 
     LOG(Info, "Returned, stopping playback");
-    // Withdraw the element before it is destroyed.
+    // Before the element is destroyed; the command thread may hold it.
     set_source(ctx, nullptr);
     gst_element_set_state(pipeline, GST_STATE_NULL);
     gst_object_unref(GST_OBJECT(pipeline));

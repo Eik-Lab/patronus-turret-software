@@ -12,8 +12,7 @@
 namespace patronus::tracking {
 namespace {
 
-  /// Records each ring holds. The writer drains every `k_drain_period`, so this
-  /// is tens of seconds of headroom at the 100 Hz tick and 40 fps camera.
+  // Tens of seconds of headroom.
   constexpr size_t k_ring_capacity = 4096;
   constexpr auto k_drain_period = std::chrono::milliseconds(100);
 
@@ -74,7 +73,7 @@ std::unique_ptr<Telemetry> Telemetry::open(const std::string &parent_dir,
   std::fputs(k_frames_header, t->frames_);
   std::fputs(k_ticks_header, t->ticks_);
 
-  // Times in the CSVs are steady_now_s(); this pins them to the wall clock.
+  // Pins steady_now_s() to the wall clock.
   char wall[32];
   std::strftime(wall, sizeof(wall), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
   std::fprintf(t->run_, "start %s steady_s %.6f\n", wall, core::steady_now_s());
@@ -164,8 +163,7 @@ void Telemetry::write_frame(const FrameRecord &r) {
                static_cast<unsigned long long>(o.frame_id_), r.step_s, o.timestamp_s_,
                o.captured_at_s_, o.capture_s_, o.frame_dt_s_, o.readout_s_, o.exposure_s_);
   if (o.detection_.has_value()) {
-    // Box centre in detection pixels, as the detector reported it. The filter's
-    // columns are aim errors (centre minus frame centre); run.txt has the size.
+    // Raw box centre; the estimate columns are aim errors from frame centre.
     const core::Detection &d = *o.detection_;
     std::fprintf(frames_, "1,%.3f,%.3f,%.2f,%.2f,%.3f,", d.left_ + (d.width_ * 0.5F),
                  d.top_ + (d.height_ * 0.5F), d.width_, d.height_, d.confidence_);

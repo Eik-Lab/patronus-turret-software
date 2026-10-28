@@ -23,8 +23,6 @@ static mab::CANdleDatarate_E to_datarate(uint8_t v) {
   return mab::CAN_DATARATE_1M;
 }
 
-// ── Lifecycle ────────────────────────────────────────────────────────────────
-
 CandleMotor::CandleMotor(const std::vector<config::GimbalConfig> &gimbals,
                          const config::CanBusConfig &bus)
   : bus_cfg_(bus), gimbals_(gimbals) {
@@ -35,8 +33,6 @@ CandleMotor::CandleMotor(const std::vector<config::GimbalConfig> &gimbals,
 CandleMotor::~CandleMotor() {
   disable();
 }
-
-// ── PDS power stage ──────────────────────────────────────────────────────────
 
 bool CandleMotor::enable_pds() {
   if (bus_cfg_.pds_node_id_ == 0) {
@@ -83,8 +79,6 @@ bool CandleMotor::enable_pds() {
   return true;
 }
 
-// ── Initialisation ───────────────────────────────────────────────────────────
-
 bool CandleMotor::init() {
   try {
     candle_ = mab::attachCandle(to_datarate(bus_cfg_.datarate_), mab::candleTypes::busTypes_t::USB);
@@ -106,13 +100,10 @@ bool CandleMotor::init() {
   pan_motors_.resize(gimbals_.size());
   tilt_motors_.resize(gimbals_.size());
 
-  // Motors are addressed by their configured node ids, with no bus scan; a
-  // wrong or absent id surfaces as a failed MD::init() below.
   for (size_t g = 0; g < gimbals_.size(); ++g) {
     pan_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].pan_node_id_, candle_);
     tilt_motors_[g] = std::make_unique<mab::MD>(gimbals_[g].tilt_node_id_, candle_);
 
-    // Per-axis velocity-PID gains from the gimbal's config (system.ini)
     auto setup_md = [&](mab::MD *md, const config::MotorPidConfig &pid) {
       if (md->init() != mab::MD::Error_t::OK) {
         LOG(Error, "CandleMotor: MD" << md->m_canId << " (gimbal " << g
@@ -146,11 +137,7 @@ bool CandleMotor::init() {
   return true;
 }
 
-// ── Boot-up calibration (ported from the standalone turret boot tool) ───────
-
-// Calibration parameters: pan is pushed into its barriers with a stiff
-// impedance and up to 5 Nm, tilt with a soft, low-torque push. 'backoff' is
-// the software-limit margin kept inside each real barrier, in radians.
+// Pan gets a stiff push into its end stops, tilt (direct drive) a soft one.
 static constexpr float k_boot_backoff_rad = 0.3F;
 static constexpr float k_pan_boot_kp = 10.0F;
 static constexpr float k_pan_boot_kd = 0.5F;
@@ -159,20 +146,15 @@ static constexpr float k_tilt_boot_kp = 1.0F;
 static constexpr float k_tilt_boot_kd = 1.0F;
 static constexpr float k_tilt_boot_torque = 3.0F;
 
-// Read back the drive's active motion mode.
 static bool mode_is(mab::MD *md, mab::MdMode_E mode) {
   md->m_mdRegisters.motionModeStatus = 0;
   return md->readRegisters(md->m_mdRegisters.motionModeStatus) == mab::MD::Error_t::OK &&
          md->m_mdRegisters.motionModeStatus.value == mode;
 }
 
-// Switch a drive to 'mode' and enable it; 'configure' writes the mode's
-// parameters. A mode written to an enabled drive, or straight after
-// disable()/zero(), does not reliably take: the drive came back in IDLE and
-// silently ignored every target, which calibration then read as an instant
-// stall. So disable, give the drive time to settle, write the mode, and
-// verify it took, retrying a few times before giving up. 'wait' sleeps the
-// given number of milliseconds while keeping the other drives' watchdogs fed.
+// A mode written to an enabled drive, or right after disable()/zero(), often
+// does not take: the drive stays IDLE and ignores targets, which calibration
+// reads as an instant stall. So disable, settle, write, read back, retry.
 template <typename Configure, typename Wait>
 static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configure,
                       const Wait &wait) {
@@ -198,9 +180,6 @@ static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configur
 }
 
 void CandleMotor::feed_watchdogs(const mab::MD *active) {
-  // A zero velocity target is right for every drive that is not being worked
-  // on: one still in its init() VELOCITY_PID mode or already parked holds
-  // still, and one disabled after a failure ignores it.
   for (auto *motors : {&pan_motors_, &tilt_motors_})
     for (auto &md : *motors)
       if (md != nullptr && md.get() != active)
@@ -218,9 +197,7 @@ float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float veloci
   if (md == nullptr || !limit.calibrated || velocity == 0.0F)
     return velocity;
 
-  // A failed read returns 0, and with the axis position unknown it is not
-  // safe to move it. No log here: this runs in the 100 Hz hot path and a
-  // failing bus would otherwise flood it.
+  // Unknown position: not safe to move. No log, this is the hot path.
   const auto pos = md->getPosition();
   if (pos.second != mab::MD::Error_t::OK)
     return 0.0F;
@@ -239,7 +216,6 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
   constexpr int max_samples = 3000;   // give up after ~30 s
   constexpr int max_read_errors = 20; // give up after this many failed position reads in a row
 
-  // Start from where the motor actually is
   const auto start = md->getPosition();
   if (start.second != mab::MD::Error_t::OK) {
     LOG(Error, "CandleMotor: MD" << node_id << ": could not read position");
@@ -253,9 +229,7 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
   int read_errors = 0;
 
   for (int sample = 0; sample < max_samples; ++sample) {
-    // Move the target along, but never further than max_lead ahead of the
-    // motor. Otherwise the target runs away from the motor and cannot be
-    // backed off from later.
+    // Capped lead, or the target runs away and cannot be backed off from.
     target += direction * step;
     if (std::abs(target - current) > max_lead)
       target = current + direction * max_lead;
@@ -265,7 +239,7 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
 
     const auto pos = md->getPosition();
     if (pos.second != mab::MD::Error_t::OK) {
-      // A failed read returns 0, so don't use it
+      // A failed read returns 0.
       if (++read_errors > max_read_errors) {
         LOG(Error, "CandleMotor: MD" << node_id << ": too many failed position reads");
         return false;
@@ -275,7 +249,6 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
     read_errors = 0;
     current = pos.first;
 
-    // If the motor cannot move for stall_samples, it has pushed into a barrier
     if (sample >= grace_samples && std::abs(current - last) < 0.01F)
       ++stall_count;
     else
@@ -296,15 +269,12 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
                                  float backoff, SoftLimit &limit) {
   constexpr float step = 0.05F; // calibration speed, rad per 10 ms tick
 
-  // The target may sit ahead of the motor by at most this much: enough to
-  // saturate the torque limit against a hard barrier.
+  // Just enough lead to saturate the torque limit.
   const float max_lead = (kp > 0.0F) ? 2.0F * torque / kp : 1.0F;
 
   limit.calibrated = false;
 
-  // Zero at the pose the axis is found in, so the limits are relative to
-  // it. init() left the drive enabled in VELOCITY_PID, so disable it before
-  // zeroing.
+  // Limits are relative to where the axis starts.
   md->disable();
   md->zero();
   if (!arm_drive(
@@ -322,7 +292,6 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
     return false;
   }
 
-  // Go up to one barrier, then down to the other, and record both
   float upper = 0.0F;
   float lower = 0.0F;
   const bool ok = find_barrier(md, node_id, +1.0F, step, max_lead, upper) &&
@@ -341,17 +310,14 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
     return false;
   }
 
-  // Software limits sit 'backoff' inside the real barriers
   limit.min_pos = lower + backoff;
   limit.max_pos = upper - backoff;
   limit.calibrated = true;
   LOG(Info, "CandleMotor: MD" << node_id << " calibrated, soft limits: [" << limit.min_pos << ", "
                               << limit.max_pos << "] rad");
 
-  // The centre of the range is home. The axis is at the lower barrier now:
-  // stop pushing into it, and let park_axis() move it to the centre once it
-  // is back in VELOCITY_PID. (An impedance ramp here stopped well short:
-  // the soft spring cannot beat friction and gravity.)
+  // park_axis() moves it to the centre later: an impedance ramp here stopped
+  // short, the soft spring cannot beat friction and gravity.
   limit.home_pos = (limit.min_pos + limit.max_pos) * 0.5F;
   md->setTargetPosition(lower);
 
@@ -370,9 +336,8 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
   constexpr float stuck_rad = 0.02F;  // ...where progress means moving this far
   constexpr float dt = 0.01F;
 
-  // Closed loop on position, so friction and gravity cannot leave the axis
-  // short of the centre. The integral term keeps pushing until the error is
-  // gone, even on axes whose velocity PID has no integral of its own.
+  // The integral pushes through friction and gravity, even on axes whose
+  // velocity PID has none.
   float integral = 0.0F;
   float err = 0.0F;
   int in_tol = 0;
@@ -384,7 +349,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
   for (int sample = 0; sample < max_samples; ++sample) {
     const auto pos = md->getPosition();
     if (pos.second != mab::MD::Error_t::OK) {
-      // A failed read returns 0, so don't use it
+      // A failed read returns 0.
       if (++read_errors > max_read_errors) {
         LOG(Error,
             "CandleMotor: MD" << node_id << ": too many failed position reads while parking");
@@ -398,8 +363,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
 
     err = target - pos.first;
 
-    // Bail out early rather than burning the whole timeout on an axis that
-    // ignores velocity commands (wrong mode, torque limit, jammed).
+    // Wrong mode, torque limit or jammed: give up early.
     if (!have_anchor || std::abs(pos.first - anchor) >= stuck_rad) {
       have_anchor = true;
       anchor = pos.first;
@@ -443,9 +407,6 @@ bool CandleMotor::boot_sequence() {
     LOG(Info, "CandleMotor: boot calibration gimbal "
                 << g << " (both axes sweep end stop to end stop, then park at the centre)");
 
-    // Put a successfully calibrated axis back into its velocity-PID mission
-    // configuration, so the tracking threads see an enabled motor in the mode
-    // the config describes. An axis that failed calibration stays disabled.
     const auto settle = [this, g](mab::MD *md, uint16_t node_id,
                                   const config::MotorPidConfig &pid) {
       if (md == nullptr)
@@ -469,8 +430,7 @@ bool CandleMotor::boot_sequence() {
       return true;
     };
 
-    // A parking miss is only logged: the limits are still valid, and
-    // return_to_home() keeps driving toward the centre once tracking starts.
+    // A parking miss is fine: return_to_home() finishes the job.
     if (calibrate_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, k_pan_boot_kp, k_pan_boot_kd,
                        k_pan_boot_torque, k_boot_backoff_rad, pan_limits_[g]) &&
         settle(pan_motors_[g].get(), gimbals_[g].pan_node_id_, gimbals_[g].pan_pid_))
@@ -489,8 +449,6 @@ bool CandleMotor::boot_sequence() {
   return all_ok;
 }
 
-// ── Per-gimbal API ───────────────────────────────────────────────────────────
-
 std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s,
                                                   float tilt_rad_s) {
   if (gimbal >= gimbals_.size())
@@ -500,9 +458,6 @@ std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s
   if (pan == nullptr || tilt == nullptr)
     return {0.0F, 0.0F};
 
-  // Scale down, then clamp to each axis's own limit (never above max_velocity).
-  // Every command goes through here, so tracking, following and homing all
-  // see the same scale and clamp.
   const auto &cfg = gimbals_[gimbal];
   pan_rad_s = std::clamp(pan_rad_s * cfg.pan_velocity_scale_, -cfg.pan_max_velocity_rad_s_,
                          cfg.pan_max_velocity_rad_s_);
@@ -510,10 +465,6 @@ std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s
                           cfg.tilt_max_velocity_rad_s_);
 
   const std::scoped_lock lock(bus_mutex_);
-  // Software limits from boot calibration: a command that would push a
-  // calibrated axis past its (backed-off) barrier is zeroed. Moving away
-  // from a limit is always allowed. Uncalibrated axes get the plain
-  // max_velocity clamp only.
   pan_rad_s = apply_limit(pan, pan_limits_[gimbal], pan_rad_s);
   tilt_rad_s = apply_limit(tilt, tilt_limits_[gimbal], tilt_rad_s);
 
@@ -552,8 +503,6 @@ std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
 
 bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                                  float max_velocity_rad_s) {
-  // Home is the centre of the calibrated range, or the start pose (0) for
-  // axes that were not calibrated this boot.
   const auto [home_pan, home_tilt] = home_position(gimbal);
   return drive_to(gimbal, home_pan, home_tilt, position_gain, tolerance_rad, max_velocity_rad_s);
 }
@@ -592,11 +541,8 @@ mab::MD *CandleMotor::tilt_motor(size_t gimbal) {
   return tilt_motors_[gimbal].get();
 }
 
-// ── Disable ──────────────────────────────────────────────────────────────────
-
 void CandleMotor::disable() {
   const std::scoped_lock lock(bus_mutex_);
-  // Silence SDK logging while tearing down motors
   const auto prev_verbosity = Logger::g_m_verbosity;
   Logger::g_m_verbosity = Logger::Verbosity_E::SILENT;
 

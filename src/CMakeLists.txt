@@ -1,4 +1,3 @@
-# Use CMake's target architecture (aarch64 = Jetson, x86_64 = dGPU).
 set(LINUX_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 set(DS_VERSION 8.0)
 # Target architecture from the compiler triple (aarch64 = Jetson, x86_64 = dGPU)
@@ -23,7 +22,7 @@ endif()
 set(SRC_PATH /opt/nvidia/deepstream/deepstream-${DS_VERSION})
 set(SRC_INC2 ${SRC_PATH}/sources/includes)
 
-# clang-tidy integration Override with -DCMAKE_CXX_CLANG_TIDY=OFF to disable
+# Runs clang-tidy when installed; -DCMAKE_CXX_CLANG_TIDY=OFF disables it.
 find_program(CLANG_TIDY NAMES clang-tidy)
 if(CLANG_TIDY
    AND NOT CMAKE_CXX_CLANG_TIDY STREQUAL "OFF"

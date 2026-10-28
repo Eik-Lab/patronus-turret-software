@@ -1,17 +1,10 @@
-// Focal-length calibration for the target filter's camera-motion compensation.
+// Measures focal_x_px/focal_y_px: steps gimbal 1 by known angles, saves a
+// frame from each camera per pose, and tools/focal_calib_analyse.py fits the
+// image shift per radian.
 //
-// Steps gimbal 1 by small known angles on each axis, grabs a frame from both
-// cameras at every pose, and writes them out as PGM (luma) together with the
-// encoder pose they were taken at. tools/focal_calib_analyse.py then measures
-// the image shift between frames and fits pixels per radian, sign included,
-// which is what [rgb]/[mono] focal_x_px/focal_y_px must be.
+// Aim at a static, textured scene over 30 m away. The cameras sit off the
+// rotation axes, so near scenes overstate the focal length (2x at 1 m).
 //
-// Point the turret at a static, textured scene that is FAR away (> 30 m). The
-// cameras sit off the rotation axes, so turning them also translates them, and
-// anything close shifts by more than the lens alone would make it: a scene at
-// 1 m reads out about twice the true focal length.
-//
-// Usage, from the repo root with the inference app stopped:
 //   ./build/focal_calib [out_dir] [config/system.ini]
 //   python3 tools/focal_calib_analyse.py out_dir
 
@@ -38,23 +31,17 @@ namespace {
 
 using namespace std::chrono_literals;
 
-/// Never wander further than this from the start pose; abort instead.
+/// Abort if the gimbal wanders further than this from the start.
 constexpr float k_abort_rad = 0.08F;
-/// Position gain and speed limit, before `velocity_scale` (0.05): 5 rad/s per
-/// rad and 0.2 rad/s at the motor.
+/// Before velocity_scale (0.05).
 constexpr float k_gain = 100.0F;
 constexpr float k_max_velocity = 4.0F;
-/// Pose offsets visited per axis, rad.
 constexpr std::array<float, 7> k_offsets{0.0F, -0.03F, -0.015F, 0.0F, 0.015F, 0.03F, 0.0F};
-/// A pose counts as still once it moves less than this over `k_still_for`.
 constexpr float k_still_rad = 0.0001F;
 constexpr auto k_still_for = 300ms;
 constexpr auto k_settle_timeout = 6s;
-/// Close enough to the target to stop waiting, and how long to wait for that
-/// before accepting wherever the gimbal stopped.
 constexpr float k_near_rad = 0.001F;
 constexpr auto k_give_up_after = 3s;
-/// Exposure is scaled until the mean luma is near this, for the calibration only.
 constexpr double k_target_luma = 100.0;
 constexpr double k_max_exposure_us = 50000.0;
 
@@ -63,7 +50,6 @@ struct Pose {
   float tilt{0.0F};
 };
 
-/// Motor loop state, shared with the 100 Hz thread that keeps the drives fed.
 struct Shared {
   std::mutex mutex;
   Pose target;
@@ -114,10 +100,8 @@ void motor_loop(patronus::comm::CandleMotor &motor, Shared &s, Pose start) {
   motor.set_velocity(0, 0.0F, 0.0F);
 }
 
-/// Wait until the gimbal is near its target and has stopped moving. An axis
-/// that sticks short of the target is accepted once it has been still for a
-/// while past `k_give_up_after`: the pose is recorded per frame, so where it
-/// stops does not matter, only that it has.
+/// An axis that sticks short is accepted once still: the pose is recorded
+/// per frame, so only stillness matters.
 bool wait_still(Shared &s) {
   const auto start = std::chrono::steady_clock::now();
   Pose ref = read_pose(s);
@@ -144,8 +128,7 @@ bool wait_still(Shared &s) {
   return false;
 }
 
-/// A frame exposed after now. LatestImageOnly holds one frame back, which may
-/// have been exposed while the gimbal was still moving, so skip past it.
+/// LatestImageOnly holds one older frame back, possibly taken mid-move.
 Pylon::CGrabResultPtr grab_fresh(Camera &c) {
   Pylon::CGrabResultPtr r;
   for (int k = 0; k < 3; ++k)
@@ -168,9 +151,8 @@ double mean_luma(const Pylon::CGrabResultPtr &r, int stride) {
   return count > 0 ? sum / static_cast<double>(count) : 0.0;
 }
 
-/// Scale the exposure until the scene is reasonably bright. At the tracking
-/// exposure an indoor scene is nearly black, and phase correlation then locks
-/// onto the sensor's fixed-pattern noise and reports no shift at all.
+/// At tracking exposure, indoor scenes are black and phase correlation
+/// locks onto fixed-pattern noise.
 void auto_expose(Camera &c) {
   Pylon::CFloatParameter exposure(c.device.GetNodeMap(), "ExposureTime");
   c.original_exposure_us = exposure.GetValue();
@@ -204,8 +186,7 @@ int caps_int(const std::string &caps, const char *key, int fallback) {
   return std::regex_search(caps, m, re) ? std::stoi(m[1].str()) : fallback;
 }
 
-/// Open a camera and set it up the way the pipeline runs it: the caps size,
-/// centred on the sensor, and the pixel format pylonsrc negotiates.
+/// Same size, centring and pixel format as the pipeline.
 void open_camera(Camera &c) {
   Pylon::CDeviceInfo info;
   info.SetSerialNumber(c.pipe->camera_serial_.c_str());
@@ -217,8 +198,7 @@ void open_camera(Camera &c) {
   Pylon::CEnumParameter(nm, "PixelFormat").SetValue(mono ? "Mono8" : "YCbCr422_8");
   c.luma_stride = mono ? 1 : 2;
 
-  // Binning first: it changes the maximum width and height the caps are fitted
-  // to. Without it the caps size would be a crop, with a different scale.
+  // Binning first: it changes the maximum size the caps are fitted to.
   const auto binning = static_cast<int64_t>(c.pipe->binning_);
   Pylon::CEnumParameter(nm, "BinningSelector").TrySetValue("Sensor");
   Pylon::CIntegerParameter(nm, "BinningHorizontal").TrySetValue(binning);
@@ -252,7 +232,6 @@ void write_meta(const std::string &path, const std::vector<Camera *> &cams) {
       << '\n';
 }
 
-/// Visit every pose, grab a frame per camera at each and log where it was taken.
 void sweep(Shared &s, Pose start, std::vector<Camera *> &cams, const std::string &out) {
   std::ofstream log(out + "/poses.csv");
   log << "idx,axis,offset_rad,pan_rad,tilt_rad\n";
@@ -302,7 +281,7 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "no gimbals in %s\n", config_path.c_str());
     return 1;
   }
-  // Only gimbal 1, the one carrying the cameras. Nothing else is powered.
+  // Only gimbal 1 carries cameras.
   patronus::comm::CandleMotor motor({cfg.gimbals_[0]}, cfg.can_bus_);
   if (!motor.init()) {
     std::fprintf(stderr, "motor init failed\n");
@@ -340,7 +319,6 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "pylon: %s\n", e.GetDescription());
       rc = 1;
     }
-    // Leave the cameras as the pipeline expects them.
     for (Camera *c : cams) {
       try {
         c->device.StopGrabbing();
@@ -353,7 +331,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Back to the start pose before letting go.
   if (!s.aborted) {
     set_target(s, start);
     wait_still(s);
@@ -367,9 +344,7 @@ int main(int argc, char **argv) {
   std::fflush(stdout);
   std::fflush(stderr);
 
-  // pylon 8 segfaults in its own static teardown on this system, even in a bare
-  // open/grab/terminate program. Everything that matters is done and the motors
-  // are disabled, so leave without running it.
+  // pylon 8 segfaults in its own static teardown here; skip it.
   Pylon::PylonTerminate();
   std::_Exit(s.aborted ? 2 : rc);
 }
