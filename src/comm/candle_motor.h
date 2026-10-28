@@ -50,12 +50,15 @@ public:
   }
 
   /// @brief Set pan/tilt velocity for a specific gimbal (rad/s).
-  ///        Clamped to the gimbal's max_velocity_rad_s. Hot path: must
+  ///        Multiplied by the axis's velocity scale, then clamped to the
+  ///        axis's max velocity (itself capped at max_velocity_rad_s). Hot path: must
   ///        return within 1 ms. After a boot_sequence() run, a command that
   ///        would push a calibrated axis further past its software limit is
   ///        zeroed (moving away from the limit is always allowed), which
   ///        costs one position read per axis on the bus.
-  void set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
+  /// @return The pan/tilt velocity actually sent to the drives, rad/s, after
+  ///         scaling, clamping and limits; zeros when nothing was sent.
+  std::pair<float, float> set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
 
   /// @brief Read back actual motor velocities for a specific gimbal.
   /// @return Pair of (pan_rad_s, tilt_rad_s).
@@ -95,6 +98,22 @@ public:
   bool return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                       float max_velocity_rad_s = 0.0F);
 
+  /// @brief Drive a specific gimbal toward an encoder pose using velocity-mode
+  ///        P-control. Software limits still apply.
+  /// @param pan_rad            Pan target, encoder radians.
+  /// @param tilt_rad           Tilt target, encoder radians.
+  /// @param position_gain      P-gain (rad/s per rad of position error).
+  /// @param tolerance_rad      Position deadband for "arrived".
+  /// @param max_velocity_rad_s Upper bound; 0 uses the gimbal's configured max.
+  /// @return true when the gimbal is within tolerance of the target.
+  bool drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                float tolerance_rad, float max_velocity_rad_s = 0.0F);
+
+  /// @brief Home pose of a specific gimbal: the centre of each calibrated
+  ///        axis's range, or 0 for an axis not calibrated this boot.
+  /// @return Pair of (pan_rad, tilt_rad).
+  std::pair<float, float> home_position(size_t gimbal) const;
+
   /// @brief Access raw pan MD for a specific gimbal (diagnostic use).
   /// @warning Calls on the returned MD bypass the bus lock; do not use while
   ///          tracking threads are running.
@@ -116,8 +135,8 @@ private:
   /// start of its calibration. Filled in by boot_sequence().
   struct SoftLimit {
     bool calibrated{false};
-    float min_pos{0.0F}; ///< Lower stop + backoff.
-    float max_pos{0.0F}; ///< Upper stop - backoff.
+    float min_pos{0.0F};  ///< Lower stop + backoff.
+    float max_pos{0.0F};  ///< Upper stop - backoff.
     float home_pos{0.0F}; ///< Centre of [min_pos, max_pos]; 0 until calibrated.
   };
 
@@ -125,8 +144,8 @@ private:
   /// physical barrier. Returns true and writes the stall position to
   /// barrier_pos. Caller must hold bus_mutex_ and have the axis in IMPEDANCE
   /// mode with suitable impedance params and torque limit.
-  bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step,
-                    float max_lead, float &barrier_pos);
+  bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step, float max_lead,
+                    float &barrier_pos);
 
   /// Find both barriers for one axis and store the soft limits. Caller must
   /// hold bus_mutex_.
@@ -137,6 +156,17 @@ private:
   /// VELOCITY_PID mode. Returns false if it never got within tolerance.
   /// Caller must hold bus_mutex_ and have the axis enabled in VELOCITY_PID.
   bool park_axis(mab::MD *md, uint16_t node_id, float target);
+
+  /// Send a zero velocity target to every drive except 'active'. Each MD
+  /// disables itself, and drops back to IDLE, once its CAN watchdog
+  /// (100-200 ms) passes without a frame, so while boot_sequence() works on
+  /// one axis for tens of seconds the others must still be addressed. Caller
+  /// must hold bus_mutex_.
+  void feed_watchdogs(const mab::MD *active);
+
+  /// Sleep 'ms' milliseconds in 10 ms steps, feeding the other drives'
+  /// watchdogs at each step. Caller must hold bus_mutex_.
+  void wait_feeding(const mab::MD *active, int ms);
 
   /// Zero a velocity command that would push a calibrated axis past its
   /// software limit. Caller must hold bus_mutex_.

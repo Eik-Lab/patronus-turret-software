@@ -75,6 +75,9 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   if (cfg.detection_height_ == 0U)
     cfg.detection_height_ = 1088U;
   cfg.draw_predictions_ = read_bool(kf, group, "draw_predictions", true);
+  cfg.readout_ms_ = read_float(kf, group, "readout_ms", 0.0F);
+  cfg.binning_ = std::clamp(read_uint<uint32_t>(kf, group, "binning", 1), 1U, 4U);
+  cfg.grab_buffers_ = read_uint<uint32_t>(kf, group, "grab_buffers", 0);
   cfg.prediction_lead_s_ = read_float(kf, group, "prediction_lead_s", 0.15F);
   if (!(cfg.prediction_lead_s_ > 0.0F))
     cfg.prediction_lead_s_ = 0.15F;
@@ -122,6 +125,26 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.calibrate_on_boot_ = read_bool(kf, group, "calibrate_on_boot", false);
   cfg.pan_pid_ = read_pid(kf, group, "pan");
   cfg.tilt_pid_ = read_pid(kf, group, "tilt");
+  cfg.pan_velocity_scale_ = read_float(kf, group, "pan_velocity_scale", 1.0F);
+  if (cfg.pan_velocity_scale_ < 0.0F)
+    cfg.pan_velocity_scale_ = 1.0F;
+  cfg.tilt_velocity_scale_ = read_float(kf, group, "tilt_velocity_scale", 1.0F);
+  if (cfg.tilt_velocity_scale_ < 0.0F)
+    cfg.tilt_velocity_scale_ = 1.0F;
+  // Per-axis clamps can only tighten max_velocity_rad_s, never loosen it.
+  cfg.pan_max_velocity_rad_s_ = read_float(kf, group, "pan_max_velocity_rad_s", 0.0F);
+  if (cfg.pan_max_velocity_rad_s_ <= 0.0F || cfg.pan_max_velocity_rad_s_ > cfg.max_velocity_rad_s_)
+    cfg.pan_max_velocity_rad_s_ = cfg.max_velocity_rad_s_;
+  cfg.tilt_max_velocity_rad_s_ = read_float(kf, group, "tilt_max_velocity_rad_s", 0.0F);
+  if (cfg.tilt_max_velocity_rad_s_ <= 0.0F ||
+      cfg.tilt_max_velocity_rad_s_ > cfg.max_velocity_rad_s_)
+    cfg.tilt_max_velocity_rad_s_ = cfg.max_velocity_rad_s_;
+  cfg.follow_ = read_uint<uint16_t>(kf, group, "follow", 0);
+  cfg.follow_gain_ = read_float(kf, group, "follow_gain", 5.0F);
+  if (cfg.follow_gain_ <= 0.0F)
+    cfg.follow_gain_ = 5.0F;
+  cfg.pan_offset_rad_ = read_float(kf, group, "pan_offset_rad", 0.0F);
+  cfg.tilt_offset_rad_ = read_float(kf, group, "tilt_offset_rad", 0.0F);
   return cfg;
 }
 
@@ -156,6 +179,12 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group) {
   cfg.filter_pipeline_latency_ms_ =
     static_cast<int>(read_uint<uint16_t>(kf, group, "filter_pipeline_latency_ms", 20));
   cfg.filter_pipeline_latency_ms_ = std::max(cfg.filter_pipeline_latency_ms_, 0);
+  cfg.filter_max_lead_ms_ =
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_max_lead_ms", 250));
+  cfg.filter_max_lead_ms_ = std::max(cfg.filter_max_lead_ms_, 0);
+  cfg.filter_actuation_latency_ms_ =
+    static_cast<int>(read_uint<uint16_t>(kf, group, "filter_actuation_latency_ms", 0));
+  cfg.filter_actuation_latency_ms_ = std::max(cfg.filter_actuation_latency_ms_, 0);
   cfg.filter_conf_noise_scale_ = read_float(kf, group, "filter_conf_noise_scale", 10.0F);
   if (cfg.filter_conf_noise_scale_ < 0.0F)
     cfg.filter_conf_noise_scale_ = 10.0F;
@@ -220,6 +249,12 @@ SystemConfig load_config(const std::string &path) {
   if (g_key_file_has_group(kf, "commands"))
     sys.command_ = read_command(kf, "commands");
 
+  // [telemetry]
+  if (g_key_file_has_group(kf, "telemetry")) {
+    sys.telemetry_.enabled_ = read_bool(kf, "telemetry", "enabled", false);
+    sys.telemetry_.dir_ = read_string(kf, "telemetry", "dir", "telemetry");
+  }
+
   // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {
     sys.can_bus_.datarate_ = read_uint<uint8_t>(kf, "can", "datarate", 1);
@@ -263,6 +298,21 @@ SystemConfig load_config(const std::string &path) {
       sys.tracking_cfg_.push_back(read_tracking(kf, "tracking"));
     else
       sys.tracking_cfg_.push_back(TrackingConfig{});
+  }
+
+  // A follower must name another gimbal that tracks from its own camera;
+  // chains and self-references would leave nothing to follow.
+  for (size_t g = 0; g < sys.gimbals_.size(); ++g) {
+    auto &gimbal = sys.gimbals_[g];
+    if (gimbal.follow_ == 0)
+      continue;
+    const size_t leader = gimbal.follow_ - 1U;
+    if (leader >= sys.gimbals_.size() || leader == g || sys.gimbals_[leader].follow_ != 0) {
+      LOG(Warning, "[can_" << (g + 1) << "] follow=" << gimbal.follow_
+                           << " does not name a gimbal that tracks from its own camera — "
+                              "ignoring it");
+      gimbal.follow_ = 0;
+    }
   }
 
   g_key_file_free(kf);

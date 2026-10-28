@@ -18,9 +18,16 @@ namespace {
   /// pipeline must not inflate the covariance without limit in a single call.
   constexpr double k_max_step_s = 0.25;
 
-  /// Longest capture-to-control extrapolation, seconds. Beyond this the
-  /// constant-acceleration model is no longer a prediction worth steering by.
-  constexpr double k_max_lead_s = 0.25;
+  /// Span the gimbal's rate is measured over when extrapolating its pose past
+  /// the newest encoder sample, seconds. Two samples one tick apart would do,
+  /// but on the telephoto one encoder count over 10 ms is hundreds of px/s;
+  /// several ticks average that out while lagging an accelerating gimbal by
+  /// only half the span.
+  constexpr double k_rate_window_s = 0.05;
+
+  /// Furthest the pose is extrapolated past the newest encoder sample, seconds.
+  /// Beyond that the history has stalled and its last rate means nothing.
+  constexpr double k_max_pose_extrapolation_s = 0.1;
 
   constexpr float k_two_pi = 6.28318530717958647692F;
 
@@ -41,6 +48,12 @@ struct TargetFilter::Impl {
   float meas_sigma_px{8.0F};
   float conf_noise_scale{10.0F};
   double latency_s{0.0};
+  /// Longest capture-to-control extrapolation, seconds. Beyond this the
+  /// constant-acceleration model is no longer a prediction worth steering by.
+  double max_lead_s{0.25};
+  /// How far past the control instant the aim error is taken, seconds: the
+  /// time the gimbal keeps turning at its current rate after a command.
+  double actuation_s{0.0};
   double max_coast_s{1.0};
 
   // Geometry.
@@ -75,13 +88,18 @@ struct TargetFilter::Impl {
   core::Point detection_error_px{0.0F, 0.0F};
   uint64_t detection_frame_id{0};
 
-  // Extrapolation to the control instant, kept for repeated observations.
-  float lead_horizon_s{0.0F};
-  core::Point lead_error{0.0F, 0.0F};
-  core::Point lead_velocity{0.0F, 0.0F};
+  // Capture time of the latest frame stepped, steady seconds.
+  double frame_capture_s{0.0};
 
-  // Encoder-angle history ring buffer.
+  // Extrapolation to the control instant, kept for repeated observations.
+  AimPoint lead{};
+
+  // Encoder-angle history ring buffer. Pan is stored as effective pan, see
+  // push_angle().
   std::array<GimbalSample, k_angle_history> history{};
+  float level_tilt_rad{0.0F};
+  float last_raw_pan_rad{0.0F};
+  float effective_pan_rad{0.0F};
   int history_head{0}; // next write index
   int history_count{0};
 
@@ -109,17 +127,52 @@ struct TargetFilter::Impl {
     history_count = 0;
   }
 
+  /// Record a pose. Pan is folded into an *effective* pan first: turning the pan
+  /// axis by `d` while the camera looks `e` above or below the horizon sweeps the
+  /// view sideways by only `d * cos(e)`, so that is what shifts the image. The
+  /// stabiliser's model is linear in the angle, so feeding it the effective pan
+  /// keeps it right at any elevation instead of only at the horizon.
   void push_angle(double t_s, float pan_rad, float tilt_rad) {
-    history[history_head] = GimbalSample{t_s, pan_rad, tilt_rad};
+    if (history_count == 0) {
+      effective_pan_rad = pan_rad;
+    } else {
+      const float d_pan = std::remainder(pan_rad - last_raw_pan_rad, k_two_pi);
+      effective_pan_rad += d_pan * std::cos(tilt_rad - level_tilt_rad);
+    }
+    last_raw_pan_rad = pan_rad;
+    history[history_head] = GimbalSample{t_s, effective_pan_rad, tilt_rad};
     history_head = (history_head + 1) % k_angle_history;
     if (history_count < k_angle_history)
       ++history_count;
   }
 
+  /// The gimbal's rate at the newest sample, rad/s, averaged over the samples
+  /// within `k_rate_window_s` of it (at least the previous one). Zero with
+  /// fewer than two samples.
+  void rate_at_newest(int newest, float &pan_rate, float &tilt_rate) const {
+    pan_rate = 0.0F;
+    tilt_rate = 0.0F;
+    if (history_count < 2)
+      return;
+    const GimbalSample &sn = history[newest];
+    int back = 1;
+    while (back + 1 < history_count &&
+           sn.t_s - history[(newest + k_angle_history - back - 1) % k_angle_history].t_s <=
+             k_rate_window_s)
+      ++back;
+    const GimbalSample &so = history[(newest + k_angle_history - back) % k_angle_history];
+    const double span = sn.t_s - so.t_s;
+    if (span > 1.0e-9) {
+      pan_rate = static_cast<float>((sn.pan_rad - so.pan_rad) / span);
+      tilt_rate = static_cast<float>((sn.tilt_rad - so.tilt_rad) / span);
+    }
+  }
+
   /// Look up the pose at an arbitrary past or future instant. Extrapolates
-  /// linearly beyond the newest sample (the common case: the tracking loop
-  /// pushes its sample before asking), interpolates inside the buffer, and
-  /// clamps to the oldest sample if the query predates all history.
+  /// beyond the newest sample along the gimbal's recent rate (the common case:
+  /// the control instant, and the actuation latency past it), interpolates
+  /// inside the buffer, and clamps to the oldest sample if the query predates
+  /// all history.
   bool angle_at(double t_query, float &pan_rad, float &tilt_rad) const {
     if (history_count == 0)
       return false;
@@ -127,23 +180,19 @@ struct TargetFilter::Impl {
     const int newest = (history_head + k_angle_history - 1) % k_angle_history;
     const GimbalSample &sn = history[newest];
 
-    if (history_count == 1) {
-      pan_rad = sn.pan_rad;
-      tilt_rad = sn.tilt_rad;
+    if (t_query >= sn.t_s) {
+      float pan_rate = 0.0F;
+      float tilt_rate = 0.0F;
+      rate_at_newest(newest, pan_rate, tilt_rate);
+      const auto ahead = static_cast<float>(std::min(t_query - sn.t_s, k_max_pose_extrapolation_s));
+      pan_rad = sn.pan_rad + (pan_rate * ahead);
+      tilt_rad = sn.tilt_rad + (tilt_rate * ahead);
       return true;
     }
 
-    if (t_query >= sn.t_s) {
-      const GimbalSample &sp = history[(newest + k_angle_history - 1) % k_angle_history];
-      const double span = sn.t_s - sp.t_s;
-      if (span > 1.0e-9) {
-        const double k = (t_query - sn.t_s) / span;
-        pan_rad = static_cast<float>(sn.pan_rad + ((sn.pan_rad - sp.pan_rad) * k));
-        tilt_rad = static_cast<float>(sn.tilt_rad + ((sn.tilt_rad - sp.tilt_rad) * k));
-      } else {
-        pan_rad = sn.pan_rad;
-        tilt_rad = sn.tilt_rad;
-      }
+    if (history_count == 1) {
+      pan_rad = sn.pan_rad;
+      tilt_rad = sn.tilt_rad;
       return true;
     }
 
@@ -169,13 +218,20 @@ struct TargetFilter::Impl {
     return true;
   }
 
+  /// When the frame was captured, on the steady clock: the pipeline's measured
+  /// stamp if it has one, otherwise its arrival less the configured latency.
+  [[nodiscard]] double capture_time(const core::FrameObservation &obs) const noexcept {
+    return (obs.captured_at_s_ > 0.0) ? obs.captured_at_s_ : (obs.timestamp_s_ - latency_s);
+  }
+
   /// Record the pose at this frame's capture and the image velocity the camera's
   /// motion caused since the previous frame. Without encoders the pose stays at
   /// zero, which kalman::Tracker reads as a camera that never moves.
   void update_frame_pose(const core::FrameObservation &obs, double dt) {
     float pan = 0.0F;
     float tilt = 0.0F;
-    const bool have_pose = ego_active && angle_at(obs.timestamp_s_ - latency_s, pan, tilt);
+    frame_capture_s = capture_time(obs);
+    const bool have_pose = ego_active && angle_at(frame_capture_s, pan, tilt);
 
     camera_compensated = have_pose && have_frame_pose && dt > 0.0;
     camera_vu = 0.0F;
@@ -193,23 +249,48 @@ struct TargetFilter::Impl {
     frame_tilt_rad = tilt;
   }
 
-  /// Extrapolate the state from this frame's capture to the control instant,
-  /// and place it in the image at the gimbal's newest pose.
-  void update_lead(const core::FrameObservation &obs, double now_s) {
-    const double waited = std::max(0.0, now_s - obs.timestamp_s_);
-    const double horizon = std::min(latency_s + waited, k_max_lead_s);
+  /// Extrapolate the state from this frame's capture to the instant a command
+  /// sent at `now_s` takes hold, `actuation_s` later, and place it in the image
+  /// at the gimbal's pose then.
+  ///
+  /// Only the target's motion is a model prediction, so only it is capped at
+  /// `max_lead_s`. The gimbal's rotation since capture is measured by the
+  /// encoders and always applied in full: capping it too would hand the control
+  /// law an error as it stood before the motors' latest movement, and it would
+  /// keep correcting for rotation that has already happened. The rotation it
+  /// will still make before the command takes hold is the same mistake one
+  /// step later: a gimbal closing on the target at speed keeps closing while
+  /// the command to slow down propagates, so it is extrapolated along the
+  /// measured rate and the command eases off early enough not to overshoot.
+  [[nodiscard]] AimPoint aim_at(double now_s) const {
+    const double t_aim = now_s + actuation_s;
+    const double age = std::max(0.0, t_aim - frame_capture_s);
+    const auto h = static_cast<float>(std::min(age, max_lead_s));
 
     float pan = frame_pan_rad;
     float tilt = frame_tilt_rad;
     if (ego_active)
-      angle_at(obs.timestamp_s_ - latency_s + horizon, pan, tilt);
+      angle_at(t_aim, pan, tilt);
 
-    const auto h = static_cast<float>(horizon);
     const kalman::Rect at = tracker.roi(pan, tilt, h);
     const kalman::PredictedState p = tracker.predict(h);
-    lead_horizon_s = h;
-    lead_error = core::Point{at.cu, at.cv};
-    lead_velocity = core::Point{p.velocity.x(), p.velocity.y()};
+    AimPoint aim{h, core::Point{at.cu, at.cv}, core::Point{p.velocity.x(), p.velocity.y()},
+                 core::Point{at.cu, at.cv}};
+    if (actuation_s > 0.0) {
+      float pan_now = frame_pan_rad;
+      float tilt_now = frame_tilt_rad;
+      if (ego_active)
+        angle_at(now_s, pan_now, tilt_now);
+      const auto h_now =
+        static_cast<float>(std::min(std::max(0.0, now_s - frame_capture_s), max_lead_s));
+      const kalman::Rect now = tracker.roi(pan_now, tilt_now, h_now);
+      aim.error_now_px = core::Point{now.cu, now.cv};
+    }
+    return aim;
+  }
+
+  void update_lead(double now_s) {
+    lead = aim_at(now_s);
   }
 
   [[nodiscard]] Estimate build_estimate(bool measured) const {
@@ -238,11 +319,17 @@ struct TargetFilter::Impl {
     v.coast_frames = coast;
     v.measured = measured;
     v.camera_compensated = camera_compensated;
-    v.lead_horizon_s = lead_horizon_s;
-    v.lead_error_u_px = lead_error.cx_;
-    v.lead_error_v_px = lead_error.cy_;
-    v.lead_vu_px_s = lead_velocity.cx_;
-    v.lead_vv_px_s = lead_velocity.cy_;
+    v.lead_horizon_s = lead.horizon_s;
+    v.lead_error_u_px = lead.error_px.cx_;
+    v.lead_error_v_px = lead.error_px.cy_;
+    v.lead_vu_px_s = lead.velocity_px_s.cx_;
+    v.lead_vv_px_s = lead.velocity_px_s.cy_;
+    v.au_px_s2 = tracker.state()(4);
+    v.av_px_s2 = tracker.state()(5);
+    v.capture_s = frame_capture_s;
+    v.frame_pan_rad = frame_pan_rad;
+    v.frame_tilt_rad = frame_tilt_rad;
+    v.nis = tracker.lastNis();
     return Estimate(v);
   }
 
@@ -322,6 +409,8 @@ TargetFilter::TargetFilter(const config::TrackingConfig &cfg, uint32_t det_width
   impl_->conf_noise_scale = cfg.filter_conf_noise_scale_;
   impl_->latency_s = static_cast<double>(cfg.filter_pipeline_latency_ms_) * 1.0e-3;
   impl_->max_coast_s = static_cast<double>(cfg.filter_max_coast_ms_) * 1.0e-3;
+  impl_->max_lead_s = static_cast<double>(cfg.filter_max_lead_ms_) * 1.0e-3;
+  impl_->actuation_s = static_cast<double>(cfg.filter_actuation_latency_ms_) * 1.0e-3;
 }
 
 TargetFilter::~TargetFilter() = default;
@@ -340,6 +429,10 @@ bool TargetFilter::initialized() const noexcept {
 
 int TargetFilter::coast_frames() const noexcept {
   return impl_->coast;
+}
+
+void TargetFilter::set_level_tilt(float tilt_rad) noexcept {
+  impl_->level_tilt_rad = tilt_rad;
 }
 
 void TargetFilter::push_gimbal_sample(double t_s, float pan_rad, float tilt_rad) {
@@ -376,7 +469,7 @@ std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observa
   if (!f.initialized) {
     if (!obs.detection_.has_value() || !f.seed(obs))
       return std::nullopt;
-    f.update_lead(obs, now_s);
+    f.update_lead(now_s);
     return f.build_estimate(true);
   }
 
@@ -401,8 +494,14 @@ std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observa
     }
   }
 
-  f.update_lead(obs, now_s);
+  f.update_lead(now_s);
   return f.build_estimate(accepted);
+}
+
+std::optional<AimPoint> TargetFilter::aim_at(double now_s) const {
+  if (!impl_->initialized)
+    return std::nullopt;
+  return impl_->aim_at(now_s);
 }
 
 void TargetFilter::reset() noexcept {

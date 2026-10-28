@@ -1,0 +1,62 @@
+# RF-DETR drone detector - DeepStream nvinfer primary config.
+#
+# Export the ONNX with model_training/export_rfdetr_onnx.py:
+#   cd model_training
+#   python export_rfdetr_onnx.py \
+#       --model-dir rf_detr_large \
+#       --output ./models/rf_detr_drone.onnx
+#
+# The export produces fixed-shape 1024x1024 input and 2-D outputs:
+#   pred_logits [300, num_classes]  raw logits (sigmoid is applied in the parser)
+#   pred_boxes  [300, 4]            normalized (cx, cy, w, h)
+#
+# IMPORTANT: RF-DETR was fine-tuned through RfDetrImageProcessor, which resizes
+# to a 1024x1024 square.  Do NOT use the YOLO letterbox settings here:
+# maintain-aspect-ratio=0 and symmetric-padding=0 stretch the frame to square,
+# matching the training preprocessing.  If you change to aspect-preserving
+# input, re-validate the model and update the coordinate mapping.
+
+[property]
+gpu-id=0
+
+# The export folds ImageNet mean/std into the patch-embedding convolution, so
+# the network expects RGB in [0, 1].  DeepStream converts uint8 -> float and
+# applies net-scale-factor; offsets must stay zero.
+net-scale-factor=0.00392156862745098
+offsets=0;0;0
+model-color-format=0
+
+onnx-file=../../model_training/models/rf_detr_drone.onnx
+# Built on the target (Jetson Thor) on first run.  FP16 is the usual choice;
+# set network-mode=0 and rename the engine to ..._fp32.engine if debugging.
+model-engine-file=../../model_training/models/rf_detr_drone.onnx_b1_gpu0_fp16.engine
+batch-size=1
+network-mode=2
+
+# RF-DETR fine-tuned on one class ("drone").
+num-detected-classes=1
+labelfile-path=labels.txt
+
+network-input-order=0
+infer-dims=3;1024;1024
+network-type=0
+gie-unique-id=1
+process-mode=1
+
+maintain-aspect-ratio=0
+symmetric-padding=0
+
+# Custom parser for set-prediction detectors: sigmoid per class, normalized
+# cxcywh boxes, and 2-D [queries, ...] output tensors.
+parse-bbox-func-name=deepstream_deformable_detr_bbox
+custom-lib-path=../../deps/deepstream-deformable-detr/libdeepstream-deformable-detr.so
+
+# Set-prediction is already de-duplicated; no NMS/clustering.
+cluster-mode=4
+enable-dla=0
+
+[class-attrs-all]
+# Applied inside the custom parser as sigmoid(logit) >= threshold.
+pre-cluster-threshold=0.5
+roi-top-offset=0
+roi-bottom-offset=0

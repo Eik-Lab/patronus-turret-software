@@ -171,15 +171,17 @@ static bool mode_is(mab::MD *md, mab::MdMode_E mode) {
 // disable()/zero(), does not reliably take: the drive came back in IDLE and
 // silently ignored every target, which calibration then read as an instant
 // stall. So disable, give the drive time to settle, write the mode, and
-// verify it took, retrying a few times before giving up.
-template <typename Configure>
-static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configure) {
+// verify it took, retrying a few times before giving up. 'wait' sleeps the
+// given number of milliseconds while keeping the other drives' watchdogs fed.
+template <typename Configure, typename Wait>
+static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configure,
+                      const Wait &wait) {
   constexpr int attempts = 3;
   constexpr int verify_polls = 10; // ~100 ms for the mode to show up after enable()
 
   for (int attempt = 0; attempt < attempts; ++attempt) {
     md->disable();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    wait(100);
     md->setMotionMode(mode);
     configure();
     md->enable();
@@ -187,12 +189,29 @@ static bool arm_drive(mab::MD *md, mab::MdMode_E mode, const Configure &configur
     for (int poll = 0; poll < verify_polls; ++poll) {
       if (mode_is(md, mode))
         return true;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait(10);
     }
   }
 
   md->disable();
   return false;
+}
+
+void CandleMotor::feed_watchdogs(const mab::MD *active) {
+  // A zero velocity target is right for every drive that is not being worked
+  // on: one still in its init() VELOCITY_PID mode or already parked holds
+  // still, and one disabled after a failure ignores it.
+  for (auto *motors : {&pan_motors_, &tilt_motors_})
+    for (auto &md : *motors)
+      if (md != nullptr && md.get() != active)
+        md->setTargetVelocity(0.0F);
+}
+
+void CandleMotor::wait_feeding(const mab::MD *active, int ms) {
+  for (int elapsed = 0; elapsed < ms; elapsed += 10) {
+    feed_watchdogs(active);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10, ms - elapsed)));
+  }
 }
 
 float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float velocity) {
@@ -242,7 +261,7 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
       target = current + direction * max_lead;
     md->setTargetPosition(target);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    wait_feeding(md, 10);
 
     const auto pos = md->getPosition();
     if (pos.second != mab::MD::Error_t::OK) {
@@ -273,8 +292,8 @@ bool CandleMotor::find_barrier(mab::MD *md, uint16_t node_id, float direction, f
   return false;
 }
 
-bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float kd,
-                                 float torque, float backoff, SoftLimit &limit) {
+bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float kd, float torque,
+                                 float backoff, SoftLimit &limit) {
   constexpr float step = 0.05F; // calibration speed, rad per 10 ms tick
 
   // The target may sit ahead of the motor by at most this much: enough to
@@ -288,10 +307,15 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
   // zeroing.
   md->disable();
   md->zero();
-  if (!arm_drive(md, mab::MdMode_E::IMPEDANCE, [&] {
-        md->setImpedanceParams(kp, kd);
-        md->setMaxTorque(torque);
-      })) {
+  if (!arm_drive(
+        md, mab::MdMode_E::IMPEDANCE,
+        [&] {
+          md->setImpedanceParams(kp, kd);
+          md->setMaxTorque(torque);
+        },
+        [&](int ms) {
+          wait_feeding(md, ms);
+        })) {
     LOG(Error, "CandleMotor: MD" << node_id << ": IMPEDANCE mode did not take (mode "
                                  << static_cast<int>(md->m_mdRegisters.motionModeStatus.value)
                                  << ") — not calibrating");
@@ -312,8 +336,7 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
 
   if (upper - lower <= 2.0F * backoff) {
     LOG(Warning, "CandleMotor: MD" << node_id << ": range (" << (upper - lower)
-                                   << " rad) is too small for a backoff of " << backoff
-                                   << " rad");
+                                   << " rad) is too small for a backoff of " << backoff << " rad");
     md->disable();
     return false;
   }
@@ -322,8 +345,8 @@ bool CandleMotor::calibrate_axis(mab::MD *md, uint16_t node_id, float kp, float 
   limit.min_pos = lower + backoff;
   limit.max_pos = upper - backoff;
   limit.calibrated = true;
-  LOG(Info, "CandleMotor: MD" << node_id << " calibrated, soft limits: [" << limit.min_pos
-                              << ", " << limit.max_pos << "] rad");
+  LOG(Info, "CandleMotor: MD" << node_id << " calibrated, soft limits: [" << limit.min_pos << ", "
+                              << limit.max_pos << "] rad");
 
   // The centre of the range is home. The axis is at the lower barrier now:
   // stop pushing into it, and let park_axis() move it to the centre once it
@@ -368,7 +391,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
         md->setTargetVelocity(0.0F);
         return false;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait_feeding(md, 10);
       continue;
     }
     read_errors = 0;
@@ -400,7 +423,7 @@ bool CandleMotor::park_axis(mab::MD *md, uint16_t node_id, float target) {
 
     integral = std::clamp(integral + err * dt, -max_vel / i_gain, max_vel / i_gain);
     md->setTargetVelocity(std::clamp(gain * err + i_gain * integral, -max_vel, max_vel));
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    wait_feeding(md, 10);
   }
 
   md->setTargetVelocity(0.0F);
@@ -423,14 +446,20 @@ bool CandleMotor::boot_sequence() {
     // Put a successfully calibrated axis back into its velocity-PID mission
     // configuration, so the tracking threads see an enabled motor in the mode
     // the config describes. An axis that failed calibration stays disabled.
-    const auto settle = [g](mab::MD *md, uint16_t node_id, const config::MotorPidConfig &pid) {
+    const auto settle = [this, g](mab::MD *md, uint16_t node_id,
+                                  const config::MotorPidConfig &pid) {
       if (md == nullptr)
         return false;
-      if (!arm_drive(md, mab::MdMode_E::VELOCITY_PID, [&] {
-            md->setVelocityPIDparam(pid.kp_, pid.ki_, pid.kd_, pid.integral_max_);
-            md->setMaxTorque(10.0F);
-            md->setTargetVelocity(0.0F);
-          })) {
+      if (!arm_drive(
+            md, mab::MdMode_E::VELOCITY_PID,
+            [&] {
+              md->setVelocityPIDparam(pid.kp_, pid.ki_, pid.kd_, pid.integral_max_);
+              md->setMaxTorque(10.0F);
+              md->setTargetVelocity(0.0F);
+            },
+            [&](int ms) {
+              wait_feeding(md, ms);
+            })) {
         LOG(Error, "CandleMotor: MD" << node_id << ": VELOCITY_PID mode did not take (mode "
                                      << static_cast<int>(md->m_mdRegisters.motionModeStatus.value)
                                      << ") — axis disabled");
@@ -442,8 +471,8 @@ bool CandleMotor::boot_sequence() {
 
     // A parking miss is only logged: the limits are still valid, and
     // return_to_home() keeps driving toward the centre once tracking starts.
-    if (calibrate_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, k_pan_boot_kp,
-                       k_pan_boot_kd, k_pan_boot_torque, k_boot_backoff_rad, pan_limits_[g]) &&
+    if (calibrate_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, k_pan_boot_kp, k_pan_boot_kd,
+                       k_pan_boot_torque, k_boot_backoff_rad, pan_limits_[g]) &&
         settle(pan_motors_[g].get(), gimbals_[g].pan_node_id_, gimbals_[g].pan_pid_))
       park_axis(pan_motors_[g].get(), gimbals_[g].pan_node_id_, pan_limits_[g].home_pos);
     else
@@ -462,17 +491,23 @@ bool CandleMotor::boot_sequence() {
 
 // ── Per-gimbal API ───────────────────────────────────────────────────────────
 
-void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s) {
+std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s,
+                                                  float tilt_rad_s) {
   if (gimbal >= gimbals_.size())
-    return;
+    return {0.0F, 0.0F};
   auto *pan = pan_motors_[gimbal].get();
   auto *tilt = tilt_motors_[gimbal].get();
   if (pan == nullptr || tilt == nullptr)
-    return;
+    return {0.0F, 0.0F};
 
-  const float max_vel = gimbals_[gimbal].max_velocity_rad_s_;
-  pan_rad_s = std::clamp(pan_rad_s, -max_vel, max_vel);
-  tilt_rad_s = std::clamp(tilt_rad_s, -max_vel, max_vel);
+  // Scale down, then clamp to each axis's own limit (never above max_velocity).
+  // Every command goes through here, so tracking, following and homing all
+  // see the same scale and clamp.
+  const auto &cfg = gimbals_[gimbal];
+  pan_rad_s = std::clamp(pan_rad_s * cfg.pan_velocity_scale_, -cfg.pan_max_velocity_rad_s_,
+                         cfg.pan_max_velocity_rad_s_);
+  tilt_rad_s = std::clamp(tilt_rad_s * cfg.tilt_velocity_scale_, -cfg.tilt_max_velocity_rad_s_,
+                          cfg.tilt_max_velocity_rad_s_);
 
   const std::scoped_lock lock(bus_mutex_);
   // Software limits from boot calibration: a command that would push a
@@ -484,6 +519,7 @@ void CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s)
 
   pan->setTargetVelocity(pan_rad_s);
   tilt->setTargetVelocity(tilt_rad_s);
+  return {pan_rad_s, tilt_rad_s};
 }
 
 std::pair<float, float> CandleMotor::get_velocity(size_t gimbal) {
@@ -508,8 +544,22 @@ std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
   return {pp.first, tp.first};
 }
 
+std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
+  if (gimbal >= gimbals_.size())
+    return {0.0F, 0.0F};
+  return {pan_limits_[gimbal].home_pos, tilt_limits_[gimbal].home_pos};
+}
+
 bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                                  float max_velocity_rad_s) {
+  // Home is the centre of the calibrated range, or the start pose (0) for
+  // axes that were not calibrated this boot.
+  const auto [home_pan, home_tilt] = home_position(gimbal);
+  return drive_to(gimbal, home_pan, home_tilt, position_gain, tolerance_rad, max_velocity_rad_s);
+}
+
+bool CandleMotor::drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                           float tolerance_rad, float max_velocity_rad_s) {
   if (gimbal >= gimbals_.size())
     return true;
   auto *pan = pan_motors_[gimbal].get();
@@ -521,11 +571,9 @@ bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float toler
                         ? std::min(max_velocity_rad_s, gimbals_[gimbal].max_velocity_rad_s_)
                         : gimbals_[gimbal].max_velocity_rad_s_;
 
-  // Home is the centre of the calibrated range, or the start pose (0) for
-  // axes that were not calibrated this boot.
   const auto [pp, pt] = get_position(gimbal);
-  const float pan_err = pp - pan_limits_[gimbal].home_pos;
-  const float tilt_err = pt - tilt_limits_[gimbal].home_pos;
+  const float pan_err = pp - pan_rad;
+  const float tilt_err = pt - tilt_rad;
   const float pan_vel = std::clamp(-pan_err * position_gain, -limit, limit);
   const float tilt_vel = std::clamp(-tilt_err * position_gain, -limit, limit);
   set_velocity(gimbal, pan_vel, tilt_vel);
