@@ -131,7 +131,6 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   cfg.tilt_velocity_scale_ = read_float(kf, group, "tilt_velocity_scale", 1.0F);
   if (cfg.tilt_velocity_scale_ < 0.0F)
     cfg.tilt_velocity_scale_ = 1.0F;
-  // Per-axis clamps can only tighten max_velocity_rad_s, never loosen it.
   cfg.pan_max_velocity_rad_s_ = read_float(kf, group, "pan_max_velocity_rad_s", 0.0F);
   if (cfg.pan_max_velocity_rad_s_ <= 0.0F || cfg.pan_max_velocity_rad_s_ > cfg.max_velocity_rad_s_)
     cfg.pan_max_velocity_rad_s_ = cfg.max_velocity_rad_s_;
@@ -154,8 +153,7 @@ static GimbalConfig read_gimbal(GKeyFile *kf, const gchar *group, uint16_t fallb
   return cfg;
 }
 
-// Keys missing from the group keep their value in `base`, so a camera group
-// such as [tracking_1.mono] only needs the keys that differ from [tracking_1].
+// Missing keys keep their value from `base`.
 static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group,
                                     const TrackingConfig &base = {}) {
   TrackingConfig cfg = base;
@@ -214,9 +212,7 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group,
   return cfg;
 }
 
-// [<group>] holds what the gimbal does whichever camera it tracks from;
-// [<group>.rgb] and [<group>.mono] override it for that camera (gains and
-// filter noise are in pixels, so they depend on the focal length).
+// [<group>.rgb] / [<group>.mono] override [<group>] per camera.
 static GimbalTrackingConfig read_gimbal_tracking(GKeyFile *kf, const std::string &group) {
   const TrackingConfig base =
     g_key_file_has_group(kf, group.c_str()) ? read_tracking(kf, group.c_str()) : TrackingConfig{};
@@ -256,41 +252,33 @@ SystemConfig load_config(const std::string &path) {
     return sys;
   }
 
-  // [general]
   sys.mode_ = read_string(kf, "general", "mode", "both");
   sys.tracking_ = read_bool(kf, "general", "tracking", false);
   sys.log_level_ = read_string(kf, "general", "log_level", "warning");
 
-  // [rgb]
   if (g_key_file_has_group(kf, "rgb"))
     sys.rgb_ = read_pipeline(kf, "rgb");
 
-  // [mono]
   if (g_key_file_has_group(kf, "mono"))
     sys.mono_ = read_pipeline(kf, "mono");
 
-  // [sensor]
   if (g_key_file_has_group(kf, "sensor"))
     sys.sensor_ = read_sensor(kf, "sensor");
 
-  // [commands]
   if (g_key_file_has_group(kf, "commands"))
     sys.command_ = read_command(kf, "commands");
 
-  // [telemetry]
   if (g_key_file_has_group(kf, "telemetry")) {
     sys.telemetry_.enabled_ = read_bool(kf, "telemetry", "enabled", false);
     sys.telemetry_.dir_ = read_string(kf, "telemetry", "dir", "telemetry");
   }
 
-  // Shared CAN bus settings from [can]
   if (g_key_file_has_group(kf, "can")) {
     sys.can_bus_.datarate_ = read_uint<uint8_t>(kf, "can", "datarate", 1);
     sys.can_bus_.pds_node_id_ = read_uint<uint16_t>(kf, "can", "pds_node_id", 100);
   }
 
-  // Per-gimbal configs: try [can_1], [can_2], ... then fall back to [can].
-  // Also try [tracking_1], [tracking_2], ... then fall back to [tracking].
+  // [can_N]/[tracking_N] up to the first gap, at most 8; else [can]/[tracking].
   bool found_numbered = false;
   for (int i = 1; i <= 8; ++i) {
     char can_group[16];
@@ -302,8 +290,7 @@ SystemConfig load_config(const std::string &path) {
       break;
 
     found_numbered = true;
-    // Numbered groups get distinct default CAN IDs; tilt sits 2 above pan,
-    // matching the documented single-gimbal default (16, 18).
+    // Distinct default IDs per gimbal, tilt 2 above pan.
     const uint16_t fallback_pan = static_cast<uint16_t>(16 + ((i - 1) * 2));
     const uint16_t fallback_tilt = static_cast<uint16_t>(fallback_pan + 2);
     sys.gimbals_.push_back(read_gimbal(kf, can_group, fallback_pan, fallback_tilt));
@@ -311,7 +298,6 @@ SystemConfig load_config(const std::string &path) {
     sys.tracking_cfg_.push_back(read_gimbal_tracking(kf, trk_group));
   }
 
-  // Legacy single-gimbal: [can] + [tracking]
   if (!found_numbered) {
     if (g_key_file_has_group(kf, "can")) {
       sys.gimbals_.push_back(read_gimbal(kf, "can", 16, 18));
@@ -322,8 +308,7 @@ SystemConfig load_config(const std::string &path) {
     sys.tracking_cfg_.push_back(read_gimbal_tracking(kf, "tracking"));
   }
 
-  // A follower must name another gimbal that tracks from its own camera;
-  // chains and self-references would leave nothing to follow.
+  // Followers must follow a gimbal that has its own camera.
   for (size_t g = 0; g < sys.gimbals_.size(); ++g) {
     auto &gimbal = sys.gimbals_[g];
     if (gimbal.follow_ == 0)

@@ -9,24 +9,16 @@
 namespace patronus::tracking {
 namespace {
 
-  /// Encoder-angle history length. At the 10 ms default tick this spans 2.56 s,
-  /// far beyond any plausible pipeline latency, so a lookup never runs out of
-  /// bracketing samples. Fixed capacity: push_gimbal_sample() must not allocate.
+  /// 2.56 s at a 10 ms tick: always spans the pipeline latency.
   constexpr int k_angle_history = 256;
 
-  /// Longest interval the model is advanced in one step, seconds. A stalled
-  /// pipeline must not inflate the covariance without limit in a single call.
+  /// So a stalled pipeline cannot blow up the covariance.
   constexpr double k_max_step_s = 0.25;
 
-  /// Span the gimbal's rate is measured over when extrapolating its pose past
-  /// the newest encoder sample, seconds. Two samples one tick apart would do,
-  /// but on the telephoto one encoder count over 10 ms is hundreds of px/s;
-  /// several ticks average that out while lagging an accelerating gimbal by
-  /// only half the span.
+  /// Averages encoder quantisation: one count per 10 ms is hundreds of px/s
+  /// on the telephoto.
   constexpr double k_rate_window_s = 0.05;
 
-  /// Furthest the pose is extrapolated past the newest encoder sample, seconds.
-  /// Beyond that the history has stalled and its last rate means nothing.
   constexpr double k_max_pose_extrapolation_s = 0.1;
 
   constexpr float k_two_pi = 6.28318530717958647692F;
@@ -39,33 +31,21 @@ namespace {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-//  Impl
-// ---------------------------------------------------------------------------
-
 struct TargetFilter::Impl {
-  // Configuration.
   float meas_sigma_px{8.0F};
   float conf_noise_scale{10.0F};
   double latency_s{0.0};
-  /// Longest capture-to-control extrapolation, seconds. Beyond this the
-  /// constant-acceleration model is no longer a prediction worth steering by.
   double max_lead_s{0.25};
-  /// How far past the control instant the aim error is taken, seconds: the
-  /// time the gimbal keeps turning at its current rate after a command.
   double actuation_s{0.0};
   double max_coast_s{1.0};
 
-  // Geometry.
   float det_w_px{1.0F};
   float det_h_px{1.0F};
-  // Image shift per radian of encoder motion, sign included (kalman::Config
-  // convention). Panning right drags a world-static point left, hence -focal.
+  // Negative: panning right moves the image left.
   float pan_px_per_rad{0.0F};
   float tilt_px_per_rad{0.0F};
   bool ego_active{false};
 
-  // Filter. Works in aim-error pixels (detection centre minus frame centre).
   kalman::Tracker tracker;
   bool initialized{false};
   double last_time_s{0.0};
@@ -73,41 +53,35 @@ struct TargetFilter::Impl {
   int coast{0};
   double coast_s{0.0};
 
-  // Gimbal pose at the current and previous frame's capture.
   bool have_frame_pose{false};
   float frame_pan_rad{0.0F};
   float frame_tilt_rad{0.0F};
-  // Camera-induced image velocity over the latest frame interval, px/s.
   float camera_vu{0.0F};
   float camera_vv{0.0F};
   bool camera_compensated{false};
 
-  // Most recent accepted detection.
   float box_w_px{0.0F};
   float box_h_px{0.0F};
   core::Point detection_error_px{0.0F, 0.0F};
   uint64_t detection_frame_id{0};
 
-  // Capture time of the latest frame stepped, steady seconds.
   double frame_capture_s{0.0};
 
-  // Extrapolation to the control instant, kept for repeated observations.
+  // Reused for a frame no newer than the last.
   AimPoint lead{};
 
-  // Encoder-angle history ring buffer. Pan is stored as effective pan, see
-  // push_angle().
+  // Pan is stored as effective pan, see push_angle().
   std::array<GimbalSample, k_angle_history> history{};
   float level_tilt_rad{0.0F};
   float last_raw_pan_rad{0.0F};
   float effective_pan_rad{0.0F};
-  int history_head{0}; // next write index
+  int history_head{0}; // next write
   int history_count{0};
 
   explicit Impl(const kalman::Config &kcfg) : tracker(kcfg) {
   }
 
-  /// Forget the track but keep the encoder history and frame clock, so the next
-  /// detection re-seeds immediately.
+  /// Keeps the encoder history, so the next detection re-seeds at once.
   void drop_track() noexcept {
     initialized = false;
     coast = 0;
@@ -127,11 +101,8 @@ struct TargetFilter::Impl {
     history_count = 0;
   }
 
-  /// Record a pose. Pan is folded into an *effective* pan first: turning the pan
-  /// axis by `d` while the camera looks `e` above or below the horizon sweeps the
-  /// view sideways by only `d * cos(e)`, so that is what shifts the image. The
-  /// stabiliser's model is linear in the angle, so feeding it the effective pan
-  /// keeps it right at any elevation instead of only at the horizon.
+  /// Pan is stored scaled by cos(elevation), which is how far it actually
+  /// sweeps the view; the stabiliser is linear in the angle.
   void push_angle(double t_s, float pan_rad, float tilt_rad) {
     if (history_count == 0) {
       effective_pan_rad = pan_rad;
@@ -146,9 +117,6 @@ struct TargetFilter::Impl {
       ++history_count;
   }
 
-  /// The gimbal's rate at the newest sample, rad/s, averaged over the samples
-  /// within `k_rate_window_s` of it (at least the previous one). Zero with
-  /// fewer than two samples.
   void rate_at_newest(int newest, float &pan_rate, float &tilt_rate) const {
     pan_rate = 0.0F;
     tilt_rate = 0.0F;
@@ -168,11 +136,6 @@ struct TargetFilter::Impl {
     }
   }
 
-  /// Look up the pose at an arbitrary past or future instant. Extrapolates
-  /// beyond the newest sample along the gimbal's recent rate (the common case:
-  /// the control instant, and the actuation latency past it), interpolates
-  /// inside the buffer, and clamps to the oldest sample if the query predates
-  /// all history.
   bool angle_at(double t_query, float &pan_rad, float &tilt_rad) const {
     if (history_count == 0)
       return false;
@@ -209,8 +172,6 @@ struct TargetFilter::Impl {
       }
     }
 
-    // Query is older than everything we have: clamp rather than extrapolate
-    // backwards through a pose we never measured.
     const GimbalSample &oldest =
       history[(newest + k_angle_history - (history_count - 1)) % k_angle_history];
     pan_rad = oldest.pan_rad;
@@ -218,15 +179,11 @@ struct TargetFilter::Impl {
     return true;
   }
 
-  /// When the frame was captured, on the steady clock: the pipeline's measured
-  /// stamp if it has one, otherwise its arrival less the configured latency.
   [[nodiscard]] double capture_time(const core::FrameObservation &obs) const noexcept {
     return (obs.captured_at_s_ > 0.0) ? obs.captured_at_s_ : (obs.timestamp_s_ - latency_s);
   }
 
-  /// Record the pose at this frame's capture and the image velocity the camera's
-  /// motion caused since the previous frame. Without encoders the pose stays at
-  /// zero, which kalman::Tracker reads as a camera that never moves.
+  /// Without encoders the pose stays 0, which the tracker reads as a still camera.
   void update_frame_pose(const core::FrameObservation &obs, double dt) {
     float pan = 0.0F;
     float tilt = 0.0F;
@@ -237,7 +194,7 @@ struct TargetFilter::Impl {
     camera_vu = 0.0F;
     camera_vv = 0.0F;
     if (camera_compensated) {
-      // Shortest arc, matching the tracker's own unwrap across the ±π seam.
+      // Shortest arc, as the tracker unwraps.
       const float d_pan = std::remainder(pan - frame_pan_rad, k_two_pi);
       const float d_tilt = std::remainder(tilt - frame_tilt_rad, k_two_pi);
       camera_vu = pan_px_per_rad * d_pan / static_cast<float>(dt);
@@ -249,19 +206,10 @@ struct TargetFilter::Impl {
     frame_tilt_rad = tilt;
   }
 
-  /// Extrapolate the state from this frame's capture to the instant a command
-  /// sent at `now_s` takes hold, `actuation_s` later, and place it in the image
-  /// at the gimbal's pose then.
-  ///
-  /// Only the target's motion is a model prediction, so only it is capped at
-  /// `max_lead_s`. The gimbal's rotation since capture is measured by the
-  /// encoders and always applied in full: capping it too would hand the control
-  /// law an error as it stood before the motors' latest movement, and it would
-  /// keep correcting for rotation that has already happened. The rotation it
-  /// will still make before the command takes hold is the same mistake one
-  /// step later: a gimbal closing on the target at speed keeps closing while
-  /// the command to slow down propagates, so it is extrapolated along the
-  /// measured rate and the command eases off early enough not to overshoot.
+  /// Only the target's motion is capped at max_lead_s. The gimbal's rotation
+  /// is measured, and capping it would make the control law correct again for
+  /// rotation that already happened. Likewise the pose is extrapolated past
+  /// now_s by the actuation latency, so the command eases off before arriving.
   [[nodiscard]] AimPoint aim_at(double now_s) const {
     const double t_aim = now_s + actuation_s;
     const double age = std::max(0.0, t_aim - frame_capture_s);
@@ -294,12 +242,9 @@ struct TargetFilter::Impl {
   }
 
   [[nodiscard]] Estimate build_estimate(bool measured) const {
-    // Centre of a zero-horizon ROI is the estimate mapped back into this frame's
-    // image, i.e. with the camera shift at capture added back.
+    // Zero horizon: the estimate mapped back into this frame's image.
     const kalman::Rect at = tracker.roi(frame_pan_rad, frame_tilt_rad, 0.0F);
     const Eigen::Vector2f velocity = tracker.velocity();
-    // Snapshot by value since kalman-cpp's packed core: dense storage is an
-    // output format, and the reference-binding idiom would hide the copy.
     const auto cov = tracker.covariance();
 
     Estimate::Values v;
@@ -338,7 +283,6 @@ struct TargetFilter::Impl {
                        (det.top_ + (det.height_ * 0.5F)) - (det_h_px * 0.5F)};
   }
 
-  /// A hesitant detection is a worse position fix: widen its noise.
   [[nodiscard]] kalman::Detection measurement(const core::Detection &det,
                                               const core::Point &error) const {
     const float confidence = std::clamp(det.confidence_, 0.0F, 1.0F);
@@ -355,8 +299,6 @@ struct TargetFilter::Impl {
     coast_s = 0.0;
   }
 
-  /// Seed a new track from this frame's detection. The pose at capture becomes
-  /// the tracker's stabilised-frame reference.
   bool seed(const core::FrameObservation &obs) {
     const core::Detection &det = *obs.detection_;
     const core::Point error = detection_error(det);
@@ -368,10 +310,6 @@ struct TargetFilter::Impl {
   }
 };
 
-// ---------------------------------------------------------------------------
-//  TargetFilter
-// ---------------------------------------------------------------------------
-
 namespace {
 
   kalman::Config make_tracker_config(const config::TrackingConfig &cfg, float pan_px_per_rad,
@@ -380,11 +318,10 @@ namespace {
     k.q_jerk = cfg.filter_q_jerk_;
     k.detection_sigma = cfg.filter_meas_sigma_px_;
     k.gate_chi2 = cfg.filter_gate_;
-    // A seed is one detection: its position is as uncertain as the detector.
     k.init_pos_sigma = cfg.filter_meas_sigma_px_;
     k.pan_px_per_rad = pan_px_per_rad;
     k.tilt_px_per_rad = tilt_px_per_rad;
-    // Track loss is decided here, by time, so it means the same at 30 and 40 fps.
+    // Track loss is decided by time instead, so it means the same on every camera.
     k.max_coast_frames = 0;
     return k;
   }
@@ -393,8 +330,7 @@ namespace {
 
 TargetFilter::TargetFilter(const config::TrackingConfig &cfg, uint32_t det_width,
                            uint32_t det_height, float focal_x_px, float focal_y_px) {
-  // Both focal lengths are required: a partial pair would stabilise one axis and
-  // leave the other to fight the gimbal, which is worse than neither.
+  // Stabilising only one axis would be worse than neither.
   const bool ego_active = focal_x_px > 0.0F && focal_y_px > 0.0F;
   const float pan_gain = ego_active ? -focal_x_px : 0.0F;
   const float tilt_gain = ego_active ? -focal_y_px : 0.0F;
@@ -444,16 +380,13 @@ std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observa
   Impl &f = *impl_;
   const core::FrameObservation &obs = observation;
 
-  // Frame interval. Prefer the camera's own cadence: the arrival stamp carries
-  // the inference time's jitter, and dividing a displacement by a jittery dt
-  // turns that jitter straight into velocity noise.
+  // Prefer the capture cadence: arrival jitter divided by dt becomes velocity noise.
   const bool first_frame = f.last_time_s <= 0.0;
   double dt = obs.timestamp_s_ - f.last_time_s;
   if (obs.capture_s_ > 0.0 && f.last_capture_s > 0.0)
     dt = obs.capture_s_ - f.last_capture_s;
 
   if (!first_frame && !(dt > 0.0)) {
-    // Not newer than the frame already processed: nothing to advance across.
     if (!f.initialized)
       return std::nullopt;
     return f.build_estimate(false);
@@ -473,7 +406,6 @@ std::optional<Estimate> TargetFilter::step(const core::FrameObservation &observa
     return f.build_estimate(true);
   }
 
-  // Initialised implies a previous frame, so `dt > 0` here.
   std::optional<kalman::Detection> z;
   core::Point error{0.0F, 0.0F};
   if (obs.detection_.has_value()) {

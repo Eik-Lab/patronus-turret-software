@@ -17,8 +17,8 @@ namespace patronus::comm {
 
 namespace {
 
-  // Exposure range in microseconds, split into steps spaced evenly on a log scale so every
-  // inc_exp:<camera> / dec_exp:<camera> command changes brightness by the same ratio.
+  // Log-spaced steps, so each command changes brightness by the same ratio.
+  // The argument picks the camera: "1" is rgb, anything else mono.
   constexpr double exposure_min_us = 50.0;
   constexpr double exposure_max_us = 20000.0;
   constexpr int exposure_steps = 40;
@@ -43,12 +43,8 @@ namespace {
 
 } // namespace
 
+// TODO: send "safety-on", "safety-off", "fire" or "hold" to the firing Arduino.
 void handleShoot() {
-  // send command to arduino, needs to initilize serial port.
-  /*   "safety-on": skru på safety
-  "safety-off": skru av safety
-  "fire": begynn å skyt
-  "hold": stopp å skyt */
 }
 
 void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
@@ -83,7 +79,6 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
     buffer[n] = '\0';
     std::string command(buffer);
 
-    // Commands may carry an argument after a colon, e.g. "inc_exp:1".
     const std::string::size_type colon = command.find(':');
     const std::string name = command.substr(0, colon);
     const std::string argument = (colon == std::string::npos) ? "" : command.substr(colon + 1);

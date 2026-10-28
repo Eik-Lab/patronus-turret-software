@@ -36,9 +36,7 @@ namespace {
     return B115200;
   }
 
-  // True when the tty belongs to the MAB CANdle adapter. The CANdle exposes a
-  // CDC-ACM interface that enumerates as /dev/ttyACM*, so with no sensor
-  // plugged in the default port is the motor bus, not a sensor.
+  // The CANdle (USB vendor 0069) also enumerates as /dev/ttyACM*.
   bool is_candle_port(const char *portname) {
     char resolved[PATH_MAX]{};
     if (realpath(portname, resolved) == nullptr)
@@ -81,8 +79,8 @@ namespace {
     tty.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
     tty.c_cflag |= CS8 | CLOCAL | CREAD;
 
-    tty.c_cc[VMIN] = 0;  // Return immediately...
-    tty.c_cc[VTIME] = 5; // ...after at most 0.5 s.
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 5;
 
     if (tcsetattr(fd, TCSANOW, &tty) == -1) {
       LOG(Error, "tcsetattr: " << std::strerror(errno));
@@ -97,7 +95,7 @@ namespace {
     return true;
   }
 
-  // Convert NMEA ddmm.mmmm + hemisphere to signed decimal degrees.
+  // NMEA ddmm.mmmm to signed decimal degrees.
   double nmea_to_decimal(double value, char direction) {
     const double degrees = std::floor(value / 100.0);
     const double minutes = value - (degrees * 100.0);
@@ -109,14 +107,11 @@ namespace {
     return result;
   }
 
-  // Read one complete Distance: or GLL packet from the serial port.
-  // Returns false on shutdown, read error, or when the port goes away.
   bool read_sensor_data(int fd, SensorData &data, const std::atomic<bool> &running) {
     std::string line;
 
     while (running.load()) {
-      // Poll rather than rely on VTIME: a hung-up tty makes read() return 0
-      // immediately, which is indistinguishable from a timeout and would spin.
+      // A hung-up tty makes read() return 0 at once, like a timeout; poll instead.
       pollfd pfd{fd, POLLIN, 0};
       const int ready = poll(&pfd, 1, 500);
 
@@ -127,7 +122,7 @@ namespace {
         return false;
       }
 
-      if (ready == 0) // Timeout with no data — keep polling.
+      if (ready == 0)
         continue;
 
       if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
