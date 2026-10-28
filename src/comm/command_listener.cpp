@@ -43,11 +43,11 @@ namespace {
 
 } // namespace
 
-// TODO: send "safety-on", "safety-off", "fire" or "hold" to the firing Arduino.
-void handleShoot() {
+// TODO: tell the image camera to take an image.
+void handle_capture_image() {
 }
 
-void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
+void run_command_thread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
   int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
     LOG(Error, "CommandListener: Failed to create socket");
@@ -83,8 +83,8 @@ void runCommandThread(const std::string &host, uint16_t port, std::atomic<bool> 
     const std::string name = command.substr(0, colon);
     const std::string argument = (colon == std::string::npos) ? "" : command.substr(colon + 1);
 
-    if (command == "shoot") {
-      handleShoot();
+    if (command == "capture_image") {
+      handle_capture_image();
     } else if (name == "inc_exp") {
       increase_exposure(argument);
     } else if (name == "dec_exp") {

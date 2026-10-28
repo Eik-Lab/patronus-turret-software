@@ -1,5 +1,5 @@
 ---
-# clang-tidy configuration for Patronus Turret Software
+# clang-tidy configuration for Patronus Bird Tracker Software
 # Based on the C++ Core Guidelines (https://isocpp.github.io/CppCoreGuidelines)
 # and the associated C++ Core Checkers.
 #

@@ -25,7 +25,8 @@ struct SensorControlGains {
                                                      core::Point velocity_px_s,
                                                      const SensorControlGains &gains);
 
-/// Camera-to-bore lever-arm correction, in degrees and mm. Unused.
-core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, float target_distance);
+/// Gimbal-camera-to-image-camera lever-arm correction, in degrees and mm. Unused.
+core::AimAngles compute_control_image_camera(float sensor_pan, float sensor_tilt,
+                                             float target_distance);
 
 } // namespace patronus::tracking

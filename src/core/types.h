@@ -10,7 +10,7 @@ struct Point {
 };
 
 /// A pan/tilt pair. The units belong to whoever produced it: the sensor
-/// control law emits normalised [-1, 1] commands, the weapon solution degrees.
+/// control law emits normalised [-1, 1] commands, the image camera solution degrees.
 struct AimAngles {
   float pan_;  ///< Positive right.
   float tilt_; ///< Positive down.

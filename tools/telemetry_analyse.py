@@ -10,7 +10,7 @@ decisions hang on:
   motors     dead time, lag and gain of the drives from command vs encoder:
              what filter_actuation_latency_ms should be
   overshoot  per acquisition, from the aim error the control law acted on
-  stabilise  ONLY meaningful with --stationary (the drone did not move in the
+  stabilise  ONLY meaningful with --stationary (the bird did not move in the
              window): fits the true focal lengths and the capture-time error
              from how the detections move against the encoders, which is what
              focal_x_px/focal_y_px and readout_ms should be. Phantom target
@@ -396,7 +396,7 @@ def report_stabilisation(frames, ticks, gcfg, stationary):
     w_tilt = centred_rate(tt, tilt, RATE_WINDOW_S)
 
     # Accepted detections only: a gated one is by definition not where the
-    # filter's target is. Each track gets its own target position, so a drone
+    # filter's target is. Each track gets its own target position, so a bird
     # that moved between acquisitions does not break the fit.
     est_on = frames["est"] == 1
     seed = np.concatenate([[0], np.cumsum(np.diff(est_on.astype(int)) == 1)])
@@ -429,13 +429,13 @@ def report_stabilisation(frames, ticks, gcfg, stationary):
             print(f"filter target speed, {name}: rms {np.sqrt(np.nanmean(sp[m] ** 2)):.1f} px/s")
 
     if not stationary:
-        print("Run with --stationary over a window where the drone held still to fit the focal\n"
-              "lengths and the capture-time error. With a moving drone the gimbal follows it, so\n"
-              "its motion and the drone's cannot be told apart.")
+        print("Run with --stationary over a window where the bird held still to fit the focal\n"
+              "lengths and the capture-time error. With a moving bird the gimbal follows it, so\n"
+              "its motion and the bird's cannot be told apart.")
         return
     if moving.sum() < 20:
         print("the gimbal barely moved in this window: nothing to fit (let it acquire the "
-              "stationary drone from off-target a few times)")
+              "stationary bird from off-target a few times)")
         return
 
     # Stationary target: within one track, du + fx * P(t + d) is constant (and
@@ -484,8 +484,8 @@ def report_stabilisation(frames, ticks, gcfg, stationary):
             print(f"  -> would need readout_ms={new:.1f}, but 0 or less means 'compute from the "
                   "caps'.\n     The error is then not in the readout estimate: suspect the encoder "
                   "timestamps or the PTS.")
-    print("Trust these only if the fitted spread is near the detector jitter (it is the drone's\n"
-          "own motion plus jitter); a much larger one means the drone moved after all.")
+    print("Trust these only if the fitted spread is near the detector jitter (it is the bird's\n"
+          "own motion plus jitter); a much larger one means the bird moved after all.")
 
 
 def main():
@@ -495,7 +495,7 @@ def main():
     ap.add_argument("--from", dest="t_from", type=float)
     ap.add_argument("--to", dest="t_to", type=float)
     ap.add_argument("--stationary", action="store_true",
-                    help="the drone held still in the window: fit focal lengths and capture time")
+                    help="the bird held still in the window: fit focal lengths and capture time")
     args = ap.parse_args()
 
     info = parse_run(os.path.join(args.run, "run.txt"))

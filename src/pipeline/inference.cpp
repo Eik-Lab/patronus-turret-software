@@ -35,7 +35,7 @@ namespace patronus::pipeline {
 namespace {
 
   constexpr int k_max_display_len = 64;
-  constexpr int k_pgie_class_id_drone = 0;
+  constexpr int k_pgie_class_id_bird = 0;
   constexpr guint k_muxer_batch_timeout_usec = 40000;
 
   /// Only reached if a tracking thread dies; avoids a frozen marker.
@@ -473,12 +473,12 @@ namespace {
                     << " ms)");
       }
 
-      guint drone_count = 0;
+      guint bird_count = 0;
       for (NvDsMetaList *l_obj = frame_meta->obj_meta_list; l_obj != nullptr; l_obj = l_obj->next) {
         const auto *obj_meta = static_cast<const NvDsObjectMeta *>(l_obj->data);
-        if (obj_meta->class_id != k_pgie_class_id_drone)
+        if (obj_meta->class_id != k_pgie_class_id_bird)
           continue;
-        ++drone_count;
+        ++bird_count;
 
         if (obs.detection_.has_value() && obj_meta->confidence <= obs.detection_->confidence_)
           continue;
@@ -500,7 +500,7 @@ namespace {
       OsdWriter osd(batch_meta, frame_meta);
 
       char count_label[k_max_display_len];
-      std::snprintf(count_label, sizeof(count_label), "Drone = %u ", drone_count);
+      std::snprintf(count_label, sizeof(count_label), "Bird = %u ", bird_count);
       osd.add_text(count_label, 10.0F, 12.0F, 18U, k_colour_white);
 
       draw_predictions(osd, *ctx, frame_t_s);

@@ -1,4 +1,4 @@
-# D-FINE large drone detector (fine-tuned ustc-community/dfine-large-coco).
+# D-FINE large bird detector (fine-tuned ustc-community/dfine-large-coco).
 # Select this file with the RGB or mono infer_config setting in config/system.ini.
 #
 # Outputs match the RF-DETR export, so it shares that parser:

@@ -110,8 +110,8 @@ int main(int argc, char *argv[]) {
 
   if (cfg.command_.enabled_) {
     command_thread = std::thread([&]() {
-      patronus::comm::runCommandThread(cfg.command_.command_host_, cfg.command_.command_port_,
-                                       running);
+      patronus::comm::run_command_thread(cfg.command_.command_host_, cfg.command_.command_port_,
+                                         running);
     });
   }
 

@@ -1,5 +1,5 @@
 {
-  description = "Patronus turret software — dev shell";
+  description = "Patronus bird tracker software — dev shell";
 
   nixConfig.sandbox = "relaxed";
 

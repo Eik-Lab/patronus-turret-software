@@ -22,7 +22,7 @@ struct Detection {
   float top_;
   float width_;
   float height_;
-  int class_id_;     ///< 0 = drone.
+  int class_id_;     ///< 0 = bird.
   float confidence_; ///< [0, 1]
 
   /// Copies of the owning FrameObservation's fields.
@@ -53,7 +53,7 @@ struct FrameObservation {
 
   uint64_t frame_id_{0};
 
-  /// Most confident drone only.
+  /// Most confident bird only.
   std::optional<Detection> detection_;
 };
 

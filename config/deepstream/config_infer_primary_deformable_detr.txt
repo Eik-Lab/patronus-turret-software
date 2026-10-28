@@ -14,7 +14,7 @@
 
 [property]
 # Deformable DETR (COCO) is trained with 91 classes. Unlike RF-DETR there is no
-# dedicated background index; after fine-tuning for drones set this to your
+# dedicated background index; after fine-tuning for birds set this to your
 # class count (e.g. 1) and update labelfile-path accordingly.
 num-detected-classes=91
 

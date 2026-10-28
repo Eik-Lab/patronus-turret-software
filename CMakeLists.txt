@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 project(
-  patronus-turret
+  patronus-bird-tracker
   VERSION 1.0.0
   LANGUAGES C CXX)
 

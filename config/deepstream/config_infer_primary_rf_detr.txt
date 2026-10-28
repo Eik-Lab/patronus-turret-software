@@ -1,10 +1,10 @@
-# RF-DETR drone detector - DeepStream nvinfer primary config.
+# RF-DETR bird detector - DeepStream nvinfer primary config.
 #
 # Export the ONNX with model_training/export_rfdetr_onnx.py:
 #   cd model_training
 #   python export_rfdetr_onnx.py \
 #       --model-dir rf_detr_large \
-#       --output ./models/rf_detr_drone.onnx
+#       --output ./models/rf_detr_bird.onnx
 #
 # The export produces fixed-shape 1024x1024 input and 2-D outputs:
 #   pred_logits [300, num_classes]  raw logits (sigmoid is applied in the parser)
@@ -26,14 +26,14 @@ net-scale-factor=0.00392156862745098
 offsets=0;0;0
 model-color-format=0
 
-onnx-file=../../model_training/models/rf_detr_drone.onnx
+onnx-file=../../model_training/models/rf_detr_bird.onnx
 # Built on the target (Jetson Thor) on first run.  FP16 is the usual choice;
 # set network-mode=0 and rename the engine to ..._fp32.engine if debugging.
-model-engine-file=../../model_training/models/rf_detr_drone.onnx_b1_gpu0_fp16.engine
+model-engine-file=../../model_training/models/rf_detr_bird.onnx_b1_gpu0_fp16.engine
 batch-size=1
 network-mode=2
 
-# RF-DETR fine-tuned on one class ("drone").
+# RF-DETR fine-tuned on one class ("bird").
 num-detected-classes=1
 labelfile-path=labels.txt
 

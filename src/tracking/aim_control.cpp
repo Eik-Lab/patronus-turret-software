@@ -5,10 +5,10 @@
 
 namespace patronus::tracking {
 
-// Camera to bore, mm.
-static constexpr float k_weapon_dx = 67.0F;
-static constexpr float k_weapon_dy = -34.0F;
-static constexpr float k_weapon_dz = 0.0F;
+// Gimbal camera to image camera, mm.
+static constexpr float k_image_camera_dx = 67.0F;
+static constexpr float k_image_camera_dy = -34.0F;
+static constexpr float k_image_camera_dz = 0.0F;
 
 core::Point detection_error(core::Point center, uint32_t frame_w, uint32_t frame_h) {
   const float half_w = static_cast<float>(frame_w) * 0.5F;
@@ -36,7 +36,8 @@ core::AimAngles compute_control_sensor(core::Point error_px, core::Point velocit
   return cmd;
 }
 
-core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, float target_distance) {
+core::AimAngles compute_control_image_camera(float sensor_pan, float sensor_tilt,
+                                             float target_distance) {
   float pan_rad = sensor_pan * (static_cast<float>(M_PI) / 180.0F);
   float tilt_rad = sensor_tilt * (static_cast<float>(M_PI) / 180.0F);
 
@@ -44,9 +45,9 @@ core::AimAngles compute_control_weapon(float sensor_pan, float sensor_tilt, floa
   float ty = target_distance * std::cos(tilt_rad) * std::sin(pan_rad);
   float tz = target_distance * std::sin(tilt_rad);
 
-  float vx = tx - k_weapon_dx;
-  float vy = ty - k_weapon_dy;
-  float vz = tz - k_weapon_dz;
+  float vx = tx - k_image_camera_dx;
+  float vy = ty - k_image_camera_dy;
+  float vz = tz - k_image_camera_dz;
 
   const float rad_to_deg = 180.0F / static_cast<float>(M_PI);
   float pan = std::atan2(vy, vx) * rad_to_deg;

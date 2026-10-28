@@ -5,7 +5,7 @@ These are runtime configuration files for the DeepStream inference pipelines.
 - `config_infer_primary_yolov8.txt` — Mono camera YOLOv8 config
 - `config_infer_primary_rgb.txt` — RGB camera YOLOv8 config
 - `config_infer_primary_deformable_detr.txt` — Deformable DETR config
-- `config_infer_primary_rf_detr.txt` — RF-DETR drone config
+- `config_infer_primary_rf_detr.txt` — RF-DETR bird config
 - `labels.txt` — Class labels
 
 ## RF-DETR
@@ -16,7 +16,7 @@ Export the fine-tuned Hugging Face checkpoint to ONNX:
 cd model_training
 python export_rfdetr_onnx.py \
   --model-dir rf_detr_large \
-  --output ./models/rf_detr_drone.onnx
+  --output ./models/rf_detr_bird.onnx
 ```
 
 The export is fixed to `1x3x1024x1024` RGB input with `pred_logits` (`[300, 1]`)
