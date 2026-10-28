@@ -36,14 +36,12 @@ class SampleGridCallback(TrainerCallback):
         self.logging_dir = logging_dir
         self._tb_writer = None
 
-        # Freeze the same N images for the whole run (first N of the val split).
+
         coco = val_dataset.coco
         self.images = []
         for image_id in val_dataset.ids[:NUM_SAMPLES]:
             file_name = coco.loadImgs(image_id)[0]["file_name"]
-            self.images.append(
-                Image.open(os.path.join(val_dataset.root, file_name)).convert("RGB")
-            )
+            self.images.append(Image.open(os.path.join(val_dataset.root, file_name)).convert("RGB"))
 
     def _predict(self, model):
         was_training = model.training
@@ -52,12 +50,10 @@ class SampleGridCallback(TrainerCallback):
         results = []
         with torch.no_grad():
             for start in range(0, len(self.images), self.batch_size):
-                images = self.images[start:start + self.batch_size]
+                images = self.images[start : start + self.batch_size]
                 inputs = self.image_processor(images=images, return_tensors="pt").to(device)
                 outputs = model(**inputs)
-                target_sizes = torch.tensor(
-                    [img.size[::-1] for img in images], device=device
-                )
+                target_sizes = torch.tensor([img.size[::-1] for img in images], device=device)
                 results.extend(
                     self.image_processor.post_process_object_detection(
                         outputs, target_sizes=target_sizes, threshold=self.score_threshold
@@ -69,11 +65,11 @@ class SampleGridCallback(TrainerCallback):
 
     def _render(self, results):
         fig, axes = plt.subplots(GRID, GRID, figsize=(16, 16))
-        for ax, img, result in zip(axes.flat, self.images, results):
+        for ax, img, result in zip(axes.flat, self.images, results, strict=False):
             ax.imshow(img)
             ax.axis("off")
             for score, label, box in zip(
-                result["scores"], result["labels"], result["boxes"]
+                result["scores"], result["labels"], result["boxes"], strict=True
             ):
                 x0, y0, x1, y1 = box.tolist()
                 ax.add_patch(
@@ -109,9 +105,7 @@ class SampleGridCallback(TrainerCallback):
 
         if self._tb_writer is None:
             self._tb_writer = SummaryWriter(log_dir=self.logging_dir)
-        self._tb_writer.add_figure(
-            "samples/predictions", fig, global_step=state.global_step
-        )
+        self._tb_writer.add_figure("samples/predictions", fig, global_step=state.global_step)
 
         plt.close(fig)
         print(f"  saved sample grid {path}")

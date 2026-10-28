@@ -1,20 +1,24 @@
 from transformers import AutoImageProcessor
 
-from src.config import resolve
+from src.config import ConfigError, resolve
 from src.data.augment import build_train_transform
 from src.data.coco import CocoDetectionDataset
 
 
 def build_datasets(config):
-    """Create the image processor and train/val COCO datasets from config.
-
-    The train split gets augment.py transforms when training.augment is set
-    (defaults to on); the val split is never augmented. Returns
-    (image_processor, train_dataset, val_dataset).
-    """
     ds_cfg = config["dataset"]
     model_cfg = config["model"]
     train_cfg = config["training"]
+
+    required = ("train_images", "train_annotations", "val_images", "val_annotations")
+    missing = [key for key in required if not ds_cfg.get(key)]
+    if missing:
+        raise ConfigError(
+            "the %s backend needs COCO annotations; missing dataset.%s. "
+            "Use --data to build a canonical dataset or run `patronus prepare`."
+            % (model_cfg.get("type", "hf"), ", dataset.".join(missing))
+        )
+
     root = ds_cfg["root"]
     image_size = train_cfg["image_size"]
 

@@ -23,8 +23,10 @@ class AspectRatio(Stat):
         }
 
     def report(self, result):
-        print(f"  aspect ratio (w/h): median {result['median']:.2f}, "
-              f"mean {result['mean']:.2f}, std {result['std']:.2f}")
+        print(
+            f"  aspect ratio (w/h): median {result['median']:.2f}, "
+            f"mean {result['mean']:.2f}, std {result['std']:.2f}"
+        )
 
     def plot(self, result, ax):
         ratios = result["ratios"]

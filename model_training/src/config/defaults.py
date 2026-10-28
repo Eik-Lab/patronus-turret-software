@@ -1,0 +1,37 @@
+TRAINING_DEFAULTS = {
+    "model": {
+        "type": "yolo",
+        "name": "yolo11s.pt",
+    },
+    "dataset": {
+        "root": None,
+        "train": None,
+        "val": None,
+        "test": None,
+        "classes": None,
+        "class_names": None,
+        "format": "coco",
+    },
+    "training": {
+        "epochs": 100,
+        "batch_size": 16,
+        "image_size": 640,
+        "learning_rate": 1e-4,
+        "weight_decay": 0.01,
+        "warmup_ratio": 0.1,
+        "seed": 0,
+        "val_fraction": 0.2,
+        "num_workers": 4,
+        "save_steps": 1000,
+        "eval_steps": 1000,
+        "logging_steps": 50,
+        "save_total_limit": 3,
+        "output_dir": "runs/my_run",
+        "tensorboard_dir": "runs/tensorboard",
+        "device": "cuda",
+        "pretrained": True,
+    },
+    "augmentation": {
+        "enabled": False,
+    },
+}

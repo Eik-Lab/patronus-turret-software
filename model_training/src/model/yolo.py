@@ -1,140 +1,103 @@
+from __future__ import annotations
+
+import json
 import os
 import shutil
 from pathlib import Path
 
-import yaml
-from ultralytics import YOLO
-
-from src.export import export_fp16
-from src.model.base import Model
+from src.model.base import Model, _generate_inference_artifacts, _run_post_training_eval
 from src.utils.filter_dataset import filter_yolo_dataset
 
 
-class Yolo(Model):
+class YOLOModel(Model):
     name = "yolo"
     coco_dataset = False
 
-    def filter(self, config, output_dir):
-        filter_yolo_dataset(config, output_dir)
+    def filter(self, config, output_dir, balance_sizes=True):
+        return filter_yolo_dataset(config, output_dir, balance_sizes=balance_sizes)
 
     def train(self, config, train_stats=None):
-        ds_cfg = config["dataset"]
-        model_cfg = config["model"]
+        from ultralytics import YOLO
+
         train_cfg = config["training"]
+        model_cfg = config["model"]
+        output_dir = Path(train_cfg["output_dir"])
+        image_size = train_cfg["image_size"]
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        data_yaml = ds_cfg.get("data_yaml") or os.path.join(
-            ds_cfg["root"], "data.yaml"
-        )
-        architecture = model_cfg.get("architecture")
-        weights = model_cfg.get("name")
-        if architecture:
-            model = YOLO(architecture)
-            if weights:
-                model.load(weights)
-        else:
-            model = YOLO(weights)
+        data_yaml = config["dataset"].get("data_yaml") or os.path.join(config["dataset"]["root"], "data.yaml")
+        model = YOLO(model_cfg.get("name") or "yolo11s.pt")
 
-        tb_dir = train_cfg.get("tensorboard_dir") or os.path.join(
-            train_cfg["output_dir"], "train"
-        )
-        project = os.path.dirname(tb_dir) or "."
-        name = os.path.basename(tb_dir)
+        overrides = {}
+        if config["model"].get("architecture"):
+            overrides["cfg"] = config["model"]["architecture"]
 
-        print(f"\nTraining {model_cfg['name']} ({self.name})", "-"*50)
-        print(f"  TensorBoard: tensorboard --logdir {project}")
         results = model.train(
             data=data_yaml,
             epochs=train_cfg["epochs"],
-            imgsz=train_cfg["image_size"],
             batch=train_cfg["batch_size"],
-            lr0=float(train_cfg["learning_rate"]),
-            lrf=float(train_cfg.get("lr_final_ratio", 0.01)),
-            weight_decay=float(train_cfg["weight_decay"]),
-            momentum=float(train_cfg.get("momentum", 0.937)),
-            warmup_epochs=float(train_cfg.get("warmup_epochs", 3.0)),
-            optimizer=train_cfg.get("optimizer", "auto"),
-            cos_lr=train_cfg.get("cos_lr", False),
-            freeze=train_cfg.get("freeze"),
-            copy_paste=float(train_cfg.get("copy_paste", 0.0)),
-            workers=train_cfg["num_workers"],
-            seed=train_cfg["seed"],
-            patience=train_cfg.get("early_stopping_patience", 0),
-            deterministic=train_cfg.get("deterministic", True),
-            project=project,
-            name=name,
-            exist_ok=True,
+            imgsz=image_size,
+            project=str(output_dir.parent),
+            name=output_dir.name,
+            device=0,
+            patience=15,
+            save=True,
+            plots=True,
+            **overrides,
         )
 
-        # Export only best.pt to ONNX, then remove all .pt files.
-        weights_dir = Path(model.trainer.save_dir) / "weights"
-        best_pt = weights_dir / "best.pt"
-        if best_pt.is_file():
-            try:
-                YOLO(str(best_pt)).export(format="onnx", imgsz=train_cfg["image_size"], simplify=True)
-            except Exception as e:
-                print(f"  Warning: ONNX export failed: {e}")
-        for pt in weights_dir.glob("*.pt"):
-            pt.unlink()
+        weights_dir = output_dir / "weights"
+        best = weights_dir / "best.pt"
+        last = weights_dir / "last.pt"
+        if best.exists():
+            shutil.copy(best, output_dir / "best.pt")
+        elif last.exists():
+            shutil.copy(last, output_dir / "last.pt")
 
-        onnx_path = weights_dir / "best.onnx"
-        if onnx_path.is_file():
-            size_mb = onnx_path.stat().st_size / (1024 * 1024)
-            print(f"  ONNX exported to {onnx_path} ({size_mb:.1f} MB)")
-            try:
-                export_fp16(str(onnx_path))
-            except Exception as e:
-                print(f"  Warning: FP16 export failed: {e}")
-            # Copy to main output dir and generate artifacts
-            main_onnx = os.path.join(train_cfg["output_dir"], "model.onnx")
-            try:
-                shutil.copy(onnx_path, main_onnx)
-                fp16_out = os.path.join(train_cfg["output_dir"], "model_fp16.onnx")
-                fp16_w = weights_dir / "best_fp16.onnx"
-                if fp16_w.exists():
-                    shutil.copy(fp16_w, fp16_out)
-            except Exception as e:
-                print(f"  Warning: Failed to copy ONNX: {e}")
-            # Generate inference artifacts
-            try:
-                from src.model.base import _generate_inference_artifacts, _run_post_training_eval
-                id2label = {}
-                # Try to get from data.yaml
-                try:
-                    ds_cfg = config["dataset"]
-                    data_yaml = ds_cfg.get("data_yaml") or os.path.join(ds_cfg["root"], "data.yaml")
-                    with open(data_yaml) as f:
-                        data = yaml.safe_load(f)
-                    names = data.get("names", {})
-                    if isinstance(names, list):
-                        id2label = {i: n for i, n in enumerate(names)}
-                    elif isinstance(names, dict):
-                        id2label = names
-                except Exception:
-                    pass
-                if not id2label:
-                    id2label = {0: "drone"}
-                _generate_inference_artifacts(
-                    train_cfg["output_dir"],
-                    id2label,
-                    train_cfg["image_size"],
-                    model_cfg.get("name", "yolo"),
-                    config,
-                )
-                _run_post_training_eval(train_cfg["output_dir"], config, train_cfg["image_size"])
-            except Exception as e:
-                print(f"  Warning: Failed to generate artifacts: {e}")
+        run_name = output_dir.name
+        try:
+            model = YOLO(str(output_dir / "best.pt" if (output_dir / "best.pt").exists() else weights_dir / "best.pt"))
+            onnx_path = model.export(format="onnx", imgsz=image_size, simplify=True)
+            if onnx_path and os.path.exists(onnx_path):
+                target = output_dir / "model.onnx"
+                if str(onnx_path) != str(target):
+                    shutil.copy(onnx_path, target)
+                shutil.copy(target, output_dir / f"{run_name}.onnx")
+        except Exception:
+            pass
 
-        rd = getattr(results, "results_dict", {})
-        metrics = {
-            "map": rd.get("metrics/mAP50-95(B)"),
-            "map_50": rd.get("metrics/mAP50(B)"),
-            "precision": rd.get("metrics/precision(B)"),
-            "recall": rd.get("metrics/recall(B)"),
-        }
+        labels = []
+        if os.path.exists(data_yaml):
+            try:
+                import yaml
 
-        print("\nEvaluation results", "-"*50)
-        for label, value in metrics.items():
-            if value is not None:
-                print(f"  {label:<16} {value:.4f}")
+                with open(data_yaml) as f:
+                    data = yaml.safe_load(f)
+                if data and "names" in data:
+                    if isinstance(data["names"], dict):
+                        labels = [data["names"][i] for i in sorted(data["names"].keys())]
+                    elif isinstance(data["names"], list):
+                        labels = data["names"]
+            except Exception:
+                pass
+        if labels:
+            with open(output_dir / "labels.txt", "w") as f:
+                for label in labels:
+                    f.write(f"{label}\n")
+            id2label = {i: label for i, label in enumerate(labels)}
+            _generate_inference_artifacts(output_dir, id2label, image_size, model_cfg.get("name"), config)
 
+        if (output_dir / "model.onnx").exists():
+            try:
+                from src.export import export_fp16
+                export_fp16(str(output_dir / "model.onnx"))
+            except Exception:
+                pass
+
+        _run_post_training_eval(output_dir, config, image_size)
+        metrics = {}
+        if hasattr(results, "results_dict"):
+            metrics = dict(results.results_dict)
+        elif isinstance(results, dict):
+            metrics = results
         return metrics

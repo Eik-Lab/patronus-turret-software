@@ -6,8 +6,6 @@ from .base import Stat
 
 
 class BboxArea(Stat):
-    """Bbox pixel-area distribution (log scale)."""
-
     name = "bbox_area"
 
     def compute(self, coco):
@@ -28,8 +26,10 @@ class BboxArea(Stat):
         }
 
     def report(self, result):
-        print(f"  bbox area (px²): min {result['min']:.0f}, "
-              f"median {result['median']:.0f}, max {result['max']:.0f}")
+        print(
+            f"  bbox area (px²): min {result['min']:.0f}, "
+            f"median {result['median']:.0f}, max {result['max']:.0f}"
+        )
 
     def plot(self, result, ax):
         areas = result["areas"]

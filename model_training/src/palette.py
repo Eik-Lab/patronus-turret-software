@@ -1,4 +1,4 @@
-# EikLab brand palette (eiklab.no).
+
 
 KREM = "#f7f4ef"
 EIK_5 = "#d4eeea"

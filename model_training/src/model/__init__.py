@@ -1,18 +1,14 @@
+'Model format registry and model-spec resolution.'
+
+
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
-from src.model.base import HFDetModel
-from src.model.yolo import Yolo
+from src.paths import PROJECT_ROOT
 
-_HF = HFDetModel()
-_YOLO = Yolo()
-
-MODEL_FORMATS = {
-    "rfdetr": _HF,
-    "dfine": _HF,
-    "hf": _HF,
-    "yolo": _YOLO,
-}
+MODEL_TYPES = frozenset({"rfdetr", "dfine", "hf", "yolo"})
 
 MODEL_ALIASES = {
     "auto": "yolo11s.pt",
@@ -33,15 +29,20 @@ MODEL_ALIASES = {
 }
 
 
-def get_format(type_name):
-    try:
-        return MODEL_FORMATS[type_name]
-    except KeyError:
-        known = ", ".join(sorted(MODEL_FORMATS))
-        raise ValueError(f"unknown model.type '{type_name}' (known: {known})")
+def get_format(type_name: str):
+    if type_name == "yolo":
+        from src.model.yolo import YOLOModel
+
+        return YOLOModel()
+    if type_name in MODEL_TYPES:
+        from src.model.base import HFDetModel
+
+        return HFDetModel()
+    known = ", ".join(sorted(MODEL_TYPES))
+    raise ValueError(f"unknown model.type '{type_name}' (known: {known})")
 
 
-def _detect_hf_type(path):
+def _detect_hf_type(path: Path) -> str:
     config_path = path / "config.json"
     if not config_path.is_file():
         return "hf"
@@ -49,25 +50,29 @@ def _detect_hf_type(path):
         data = json.loads(config_path.read_text())
     except (OSError, json.JSONDecodeError):
         return "hf"
-    architectures = data.get("architectures") or []
-    for arch in architectures:
-        arch_lower = str(arch).lower()
-        if "rfdetr" in arch_lower or "rt-detr" in arch_lower and "rfdetr" in str(data).lower():
+
+    text = str(data).lower()
+    for architecture in data.get("architectures") or []:
+        arch_lower = str(architecture).lower()
+        if "rfdetr" in arch_lower or ("rt-detr" in arch_lower and "rfdetr" in text):
             return "rfdetr"
         if "dfine" in arch_lower:
             return "dfine"
-    if "rfdetr" in str(data).lower():
+    if "rfdetr" in text:
         return "rfdetr"
-    if "dfine" in str(data).lower():
+    if "dfine" in text:
         return "dfine"
     return "hf"
 
 
-def resolve_model(spec=None, architecture=None):
-    """Resolve a model spec (alias, HF id, .pt, or local dir) to a model config."""
+def resolve_model(spec: str | None = None, architecture: str | None = None) -> dict:
     raw = (spec or "auto").strip()
     name = MODEL_ALIASES.get(raw.lower(), raw)
-    lower = str(name).lower()
+    path = Path(name).expanduser()
+    if not path.is_absolute() and (PROJECT_ROOT / path).exists():
+        name = str((PROJECT_ROOT / path).resolve())
+        path = Path(name)
+    lower = name.lower()
 
     if lower.endswith(".pt"):
         model_type = "yolo"
@@ -76,12 +81,9 @@ def resolve_model(spec=None, architecture=None):
     elif "dfine" in lower:
         model_type = "dfine"
     else:
-        path = Path(name)
+        path = Path(name).expanduser()
         if path.is_dir() and (path / "config.json").is_file():
             model_type = _detect_hf_type(path)
-        elif "/" in name or "-" in name:
-            # HuggingFace repo id or local path - default to hf unless matched above
-            model_type = "hf"
         else:
             model_type = "hf"
 

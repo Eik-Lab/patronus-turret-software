@@ -7,7 +7,6 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def yolo_split_to_coco(image_dir, label_dir, class_names):
-    """Convert a YOLO split to a COCO-format dict."""
     image_dir = Path(image_dir)
     label_dir = Path(label_dir)
 
@@ -37,7 +36,7 @@ def yolo_split_to_coco(image_dir, label_dir, class_names):
                     continue
                 cls = int(parts[0])
                 cx, cy, bw, bh = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-                # Convert normalised center-xywh to absolute xywh (COCO format).
+
                 abs_w = bw * w
                 abs_h = bh * h
                 abs_x = (cx - bw / 2) * w

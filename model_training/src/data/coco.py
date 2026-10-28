@@ -3,20 +3,12 @@ import torchvision
 
 
 class CocoDetectionDataset(torchvision.datasets.CocoDetection):
-    """COCO dataset that emits what the HF object-detection models expect.
-
-    An optional albumentations transform (see augment.py) is applied to the
-    image and bounding boxes before the HF image processor normalises them.
-    """
-
     def __init__(self, img_folder, ann_file, processor, transform=None):
         super().__init__(img_folder, ann_file)
         self.processor = processor
         self.transform = transform
-        # COCO category ids (e.g. 1..90 with gaps) -> contiguous model label
-        # indices, in the same sorted-id order base.py uses to build id2label.
-        # The HF processors pass category_id through untouched, and the model
-        # head only has num_labels slots, so raw ids would index out of range.
+
+
         self._category_map = {
             cat_id: idx for idx, cat_id in enumerate(sorted(self.coco.getCatIds()))
         }

@@ -1,5 +1,5 @@
 dataset:
-  root: /home/frederic/Documents/patronus-turret-software/model_training/repository_location/option_A_half_total
+  root: ./repository_location/option_A_half_total
   train_images: train
   train_annotations: train/annotations.json
   val_images: val

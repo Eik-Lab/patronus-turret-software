@@ -1,56 +1,39 @@
 from collections import Counter
-from src.palette import EIK_30, EIK_50, EIK_80
-from .base import Stat
 
-# Object area as a percentage of the image area.
-SMALL_MAX_PCT = 0.5
-MEDIUM_MAX_PCT = 3.0
+from src.palette import EIK_20, EIK_50, EIK_80, STORM_40
+from src.size_buckets import SIZE_BUCKETS, empty_counts, size_bucket, size_label
+
+from .base import Stat
 
 
 class ObjectSize(Stat):
     name = "object_size"
 
     def compute(self, coco):
-        image_area = {
-            img["id"]: img["width"] * img["height"] for img in coco["images"]
-        }
+        image_area = {img["id"]: img["width"] * img["height"] for img in coco["images"]}
         buckets = Counter()
         for ann in coco["annotations"]:
-            # Prefer the stored area; fall back to width*height of the bbox.
-            area = ann.get("area")
-            if area is None:
-                _, _, w, h = ann["bbox"]
-                area = w * h
-            total = image_area.get(ann["image_id"], 0)
-            if not total:
-                continue
-            pct = 100.0 * area / total
-            if pct < SMALL_MAX_PCT:
-                buckets["small"] += 1
-            elif pct < MEDIUM_MAX_PCT:
-                buckets["medium"] += 1
-            else:
-                buckets["large"] += 1
-        return {"size_buckets": dict(buckets)}
+            _, _, width, height = ann["bbox"]
+            bucket = size_bucket(width * height, image_area.get(ann["image_id"], 0))
+            if bucket is not None:
+                buckets[bucket] += 1
+        return {"size_buckets": {**empty_counts(), **dict(buckets)}}
 
     def report(self, result):
         buckets = result["size_buckets"]
         total = sum(buckets.values())
-        labels = {
-            "small": f"small (<{SMALL_MAX_PCT}%)",
-            "medium": f"medium ({SMALL_MAX_PCT}-{MEDIUM_MAX_PCT}%)",
-            "large": f"large (>={MEDIUM_MAX_PCT}%)",
-        }
         print("  object sizes (% of image area):")
-        for name in ("small", "medium", "large"):
+        for name in SIZE_BUCKETS:
             count = buckets.get(name, 0)
             share = round(100.0 * count / total, 1) if total else 0.0
-            print(f"    {labels[name]}: {count} ({share}%)")
+            print(f"    {size_label(name):<22} {count:>8}  ({share:5.1f}%)")
 
     def plot(self, result, ax):
         buckets = result["size_buckets"]
-        names = ["small", "medium", "large"]
-        counts = [buckets.get(name, 0) for name in names]
-        ax.bar(names, counts, color=[EIK_80, EIK_50, EIK_30])
+        counts = [buckets.get(name, 0) for name in SIZE_BUCKETS]
+        colors = [STORM_40, EIK_20, EIK_50, EIK_80]
+        ax.bar(list(SIZE_BUCKETS), counts, color=colors)
         ax.set_ylabel("annotations")
+        for index, count in enumerate(counts):
+            ax.text(index, count, str(count), ha="center", va="bottom")
         return True
