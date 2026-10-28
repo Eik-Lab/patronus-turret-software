@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 from PIL import Image
 
-from src.size_buckets import SIZE_BUCKETS, empty_counts, size_bucket
+from src.data.size_buckets import SIZE_BUCKETS, empty_counts, size_bucket
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
@@ -505,4 +505,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

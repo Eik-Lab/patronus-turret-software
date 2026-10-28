@@ -47,4 +47,4 @@ def main(argv=None):
     return run_eval(model_path=model_path, model_type=model_type, resolution=resolution, datasets=DATASETS)
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    main()

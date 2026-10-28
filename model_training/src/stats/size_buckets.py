@@ -1,6 +1,6 @@
-'Compatibility re-export; the bucket definitions live in ``src.size_buckets``.'
+'Compatibility re-export; the bucket definitions live in ``src.data.size_buckets``.'
 
-from src.size_buckets import (
+from src.data.size_buckets import (
     MEDIUM_MAX_PCT,
     SIZE_BUCKETS,
     SMALL_MAX_PCT,

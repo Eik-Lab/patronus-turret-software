@@ -28,7 +28,6 @@ TRAINING_DEFAULTS = {
         "save_total_limit": 3,
         "output_dir": "runs/my_run",
         "tensorboard_dir": "runs/tensorboard",
-        "device": "cuda",
         "pretrained": True,
     },
     "augmentation": {

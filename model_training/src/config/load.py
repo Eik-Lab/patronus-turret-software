@@ -64,6 +64,8 @@ def _validate(config: dict, source: Path) -> None:
     if not model.get("name"):
         raise ConfigError("model.name is required")
     training = config.get("training") or {}
+    if "device" in training:
+        raise ConfigError("training.device is not supported; GPU selection is automatic")
     for key in ("epochs", "batch_size", "image_size"):
         value = training.get(key)
         if not isinstance(value, int) or value <= 0:

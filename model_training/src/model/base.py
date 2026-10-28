@@ -4,9 +4,9 @@ from pathlib import Path
 import torch
 
 from src.data.dataset import build_datasets
-from src.export import export_fp16
-from src.metrics import compute_metrics
-from src.samples import SampleGridCallback
+from src.model.export import export_fp16
+from src.model.metrics import compute_metrics
+from src.model.samples import SampleGridCallback
 from src.utils.filter_dataset import filter_coco_dataset
 
 
@@ -67,7 +67,8 @@ class HFDetModel(Model):
             load_best_model_at_end=True,
             metric_for_best_model="eval_map",
             greater_is_better=True,
-            fp16=torch.cuda.is_available(),
+            fp16=train_cfg["device"] == "cuda",
+            use_cpu=False,
             dataloader_pin_memory=True,
         )
 
@@ -102,14 +103,105 @@ def _export_onnx(model, output_dir, image_size, model_name=None, config=None):
     model_name_lower = str(model_name).lower()
     config = config or {}
     model_cfg = config.get("model", {}) if isinstance(config, dict) else {}
+    model_type = str(model_cfg.get("type", "")).lower()
 
-    if "rfdetr" in model_name_lower or "rf-detr" in model_name_lower or model_cfg.get("type") == "rfdetr":
+    if "rfdetr" in model_name_lower or "rf-detr" in model_name_lower or model_type == "rfdetr":
         try:
             from src.export_rfdetr_onnx import export_onnx
 
             onnx_path = os.path.join(output_dir, f"{os.path.basename(output_dir) or 'model'}.onnx")
             export_onnx(output_dir, onnx_path, resolution=image_size, fold_normalization=True, check=True)
             if os.path.isfile(onnx_path):
+                return onnx_path
+        except Exception:
+            pass
+
+    if "dfine" in model_name_lower or model_type == "dfine":
+        try:
+            class _DFineWrapper(torch.nn.Module):
+                def __init__(self, inner):
+                    super().__init__()
+                    self.inner = inner
+
+                def forward(self, pixel_values, pixel_mask=None):
+                    out = self.inner(pixel_values=pixel_values, pixel_mask=pixel_mask)
+                    if hasattr(out, "logits") and hasattr(out, "pred_boxes"):
+                        return out.logits, out.pred_boxes
+                    if isinstance(out, dict):
+                        logits = out.get("logits") or out.get("pred_logits") or out.get("class_logits")
+                        boxes = out.get("pred_boxes") or out.get("boxes") or out.get("pred_bbox")
+                        if logits is not None and boxes is not None:
+                            return logits, boxes
+                    # Fallback to tuple access
+                    try:
+                        if isinstance(out, (tuple, list)) and len(out) >= 2:
+                            return out[0], out[1]
+                    except Exception:
+                        pass
+                    raise RuntimeError("Could not extract logits and boxes from DFINE model output")
+
+            wrapper = _DFineWrapper(model).eval()
+            device = next(model.parameters()).device
+            dummy_pixels = torch.randn(1, 3, image_size, image_size, device=device)
+            try:
+                dummy_mask = torch.ones(1, image_size, image_size, dtype=torch.long, device=device)
+            except Exception:
+                dummy_mask = None
+            onnx_path = os.path.join(output_dir, "model.onnx")
+            try:
+                if dummy_mask is not None:
+                    torch.onnx.export(
+                        wrapper,
+                        (dummy_pixels, dummy_mask),
+                        onnx_path,
+                        input_names=["pixel_values", "pixel_mask"],
+                        output_names=["pred_logits", "pred_boxes"],
+                        dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "pred_logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                        opset_version=17,
+                        dynamo=False,
+                    )
+                else:
+                    torch.onnx.export(
+                        wrapper,
+                        (dummy_pixels,),
+                        onnx_path,
+                        input_names=["pixel_values"],
+                        output_names=["pred_logits", "pred_boxes"],
+                        dynamic_axes={"pixel_values": {0: "batch"}, "pred_logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                        opset_version=17,
+                        dynamo=False,
+                    )
+            except Exception:
+                if dummy_mask is not None:
+                    torch.onnx.export(
+                        wrapper,
+                        (dummy_pixels, dummy_mask),
+                        onnx_path,
+                        input_names=["pixel_values", "pixel_mask"],
+                        output_names=["logits", "pred_boxes"],
+                        dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                        opset_version=17,
+                        dynamo=False,
+                    )
+                else:
+                    torch.onnx.export(
+                        wrapper,
+                        (dummy_pixels,),
+                        onnx_path,
+                        input_names=["pixel_values"],
+                        output_names=["logits", "pred_boxes"],
+                        dynamic_axes={"pixel_values": {0: "batch"}, "logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                        opset_version=17,
+                        dynamo=False,
+                    )
+            try:
+                from onnxslim import slim
+                import onnx
+
+                onnx.save(slim(onnx_path), onnx_path)
+            except Exception:
+                pass
+            if os.path.isfile(onnx_path) and os.path.getsize(onnx_path) > 0:
                 return onnx_path
         except Exception:
             pass
@@ -130,29 +222,57 @@ def _export_onnx(model, output_dir, image_size, model_name=None, config=None):
     wrapper = _Wrapper(model).eval()
     device = next(model.parameters()).device
     dummy_pixels = torch.randn(1, 3, image_size, image_size, device=device)
-    dummy_mask = torch.ones(1, image_size, image_size, dtype=torch.long, device=device)
+    try:
+        dummy_mask = torch.ones(1, image_size, image_size, dtype=torch.long, device=device)
+    except Exception:
+        dummy_mask = None
     onnx_path = os.path.join(output_dir, "model.onnx")
     try:
-        torch.onnx.export(
-            wrapper,
-            (dummy_pixels, dummy_mask),
-            onnx_path,
-            input_names=["pixel_values", "pixel_mask"],
-            output_names=["pred_logits", "pred_boxes"],
-            dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "pred_logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
-            opset_version=17,
-            dynamo=False,
-        )
+        if dummy_mask is not None:
+            torch.onnx.export(
+                wrapper,
+                (dummy_pixels, dummy_mask),
+                onnx_path,
+                input_names=["pixel_values", "pixel_mask"],
+                output_names=["pred_logits", "pred_boxes"],
+                dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "pred_logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                opset_version=17,
+                dynamo=False,
+            )
+        else:
+            torch.onnx.export(
+                wrapper,
+                (dummy_pixels,),
+                onnx_path,
+                input_names=["pixel_values"],
+                output_names=["pred_logits", "pred_boxes"],
+                dynamic_axes={"pixel_values": {0: "batch"}, "pred_logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                opset_version=17,
+                dynamo=False,
+            )
     except Exception:
-        torch.onnx.export(
-            wrapper,
-            (dummy_pixels, dummy_mask),
-            onnx_path,
-            input_names=["pixel_values", "pixel_mask"],
-            output_names=["logits", "pred_boxes"],
-            dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
-            opset_version=17,
-        )
+        if dummy_mask is not None:
+            torch.onnx.export(
+                wrapper,
+                (dummy_pixels, dummy_mask),
+                onnx_path,
+                input_names=["pixel_values", "pixel_mask"],
+                output_names=["logits", "pred_boxes"],
+                dynamic_axes={"pixel_values": {0: "batch"}, "pixel_mask": {0: "batch"}, "logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                opset_version=17,
+                dynamo=False,
+            )
+        else:
+            torch.onnx.export(
+                wrapper,
+                (dummy_pixels,),
+                onnx_path,
+                input_names=["pixel_values"],
+                output_names=["logits", "pred_boxes"],
+                dynamic_axes={"pixel_values": {0: "batch"}, "logits": {0: "batch"}, "pred_boxes": {0: "batch"}},
+                opset_version=17,
+                dynamo=False,
+            )
     try:
         from onnxslim import slim
         import onnx
@@ -174,7 +294,7 @@ def _remove_checkpoints(output_dir):
 
 
 def _generate_inference_artifacts(output_dir, id2label, image_size, model_name, config):
-    from src.inference_artifacts import generate_inference_artifacts
+    from src.model.inference_artifacts import generate_inference_artifacts
 
     generate_inference_artifacts(output_dir, id2label, image_size, model_name, config)
 

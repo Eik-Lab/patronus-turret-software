@@ -34,5 +34,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"train.py" = "train.py"
+
 [dependency-groups]
 dev = []

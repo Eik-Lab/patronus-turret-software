@@ -2,7 +2,7 @@ import os
 
 
 def model_training_dir():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def generate_inference_artifacts(output_dir, id2label, image_size, model_name, config):

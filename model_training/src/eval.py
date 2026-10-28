@@ -4,4 +4,4 @@ __all__ = ["main", "run_eval"]
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

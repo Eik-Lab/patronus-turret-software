@@ -2,7 +2,7 @@ from collections import Counter
 
 import numpy as np
 
-from src.palette import PRIMARY
+from src.stats.palette import PRIMARY
 
 from .base import Stat
 

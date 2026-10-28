@@ -1,6 +1,6 @@
 from collections import Counter
 
-from src.palette import PRIMARY
+from src.stats.palette import PRIMARY
 
 from .base import Stat
 

@@ -1,14 +1,9 @@
-import sys
-
-from src import train
+from train import main as train_main
 
 
 def main(argv: list[str] | None = None) -> int:
-    result = train.main(argv)
-    if isinstance(result, dict):
-        return 0
-    return result if result is not None else 0
+    return train_main(argv)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

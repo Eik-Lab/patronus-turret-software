@@ -117,7 +117,6 @@ def apply_overrides(config: dict, overrides: dict) -> dict:
         "num_workers",
         "output_dir",
         "tensorboard_dir",
-        "device",
     )
     if overrides.get("dataset_root") is not None:
         _rebase_dataset(config["dataset"], resolve_path(overrides["dataset_root"]))

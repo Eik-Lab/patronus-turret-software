@@ -89,7 +89,7 @@ class YOLOModel(Model):
 
         if (output_dir / "model.onnx").exists():
             try:
-                from src.export import export_fp16
+                from src.model.export import export_fp16
                 export_fp16(str(output_dir / "model.onnx"))
             except Exception:
                 pass

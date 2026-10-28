@@ -10,7 +10,7 @@ from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
 from transformers import TrainerCallback
 
-from src.palette import HIGHLIGHT
+from src.stats.palette import HIGHLIGHT
 
 GRID = 4
 NUM_SAMPLES = GRID * GRID
