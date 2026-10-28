@@ -1,0 +1,32 @@
+# D-FINE large drone detector (fine-tuned ustc-community/dfine-large-coco).
+# Select this file with the RGB or mono infer_config setting in config/system.ini.
+#
+# Outputs match the RF-DETR export, so it shares that parser:
+#   pred_logits [batch, 300, 1]  raw logits (sigmoid is applied in the parser)
+#   pred_boxes  [batch, 300, 4]  normalized (cx, cy, w, h)
+# Build the parser on the target first:
+#   make -C deps/deepstream-deformable-detr
+# The engine is built from the ONNX on first run (takes a few minutes).
+[property]
+gpu-id=0
+net-scale-factor=0.00392156862745098
+offsets=0;0;0
+model-color-format=0
+onnx-file=../../model_training/models/dfine_large.onnx
+model-engine-file=../../model_training/models/dfine_large.onnx_b1_gpu0_fp16.engine
+labelfile-path=labels.txt
+batch-size=1
+network-mode=2
+num-detected-classes=1
+gie-unique-id=1
+network-type=0
+cluster-mode=4
+infer-dims=3;640;640
+maintain-aspect-ratio=0
+symmetric-padding=0
+output-blob-names=pred_logits;pred_boxes
+custom-lib-path=../../deps/deepstream-deformable-detr/libdeepstream-deformable-detr.so
+parse-bbox-func-name=deepstream_deformable_detr_bbox
+
+[class-attrs-all]
+pre-cluster-threshold=0.5

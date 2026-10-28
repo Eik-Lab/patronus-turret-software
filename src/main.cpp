@@ -197,17 +197,23 @@ int main(int argc, char *argv[]) {
         LOG(Info, "Gimbal " << g << ": prediction overlay only — motors not driven");
       }
 
-      // Each gimbal gets a copy of its tracking config and shared motor handle
-      const auto trk = cfg.tracking_cfg_[g];
       const auto gimbal_cfg = cfg.gimbals_[g];
 
-      // Round-robin across cameras among the gimbals that carry one, mono first
-      // (the telephoto tracks at range); when only one pipeline is active, every
-      // such gimbal reads from it. The pipeline a gimbal reads from is also the
-      // one whose geometry and focal lengths its filter must use, so select it
-      // once here and capture it by value.
-      const bool use_rgb = (rgb_active && mono_active) ? (k % 2 != 0) : rgb_active;
+      // [can_N] camera= picks the pipeline; without it, round-robin across
+      // cameras among the gimbals that carry one, mono first. When only one
+      // pipeline is active, every such gimbal reads from it. The pipeline a
+      // gimbal reads from is also the one whose geometry and focal lengths its
+      // filter must use, so select it once here and capture it by value.
+      const std::string &want = cfg.gimbals_[g].camera_;
+      const bool use_rgb =
+        (rgb_active && mono_active) ? (want.empty() ? (k % 2 != 0) : want == "rgb") : rgb_active;
+      if (!want.empty() && (want == "rgb") != use_rgb)
+        LOG(Warning, "Gimbal " << g << ": camera=" << want << " is not running — tracking from "
+                               << (use_rgb ? "rgb" : "mono") << " instead");
       const auto pipe = use_rgb ? cfg.rgb_ : cfg.mono_;
+      // Each gimbal gets a copy of its tracking config for that camera and the
+      // shared motor handle
+      const auto trk = use_rgb ? cfg.tracking_cfg_[g].rgb_ : cfg.tracking_cfg_[g].mono_;
       auto *predictions = use_rgb ? &predictions_rgb : &predictions_mono;
       const std::vector<size_t> follower_ids = followers[g];
       const auto all_gimbals = cfg.gimbals_;
