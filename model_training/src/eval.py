@@ -1,4 +1,4 @@
-from src.eval.api import main, run_eval
+from src.eval.eval import main, run_eval
 
 __all__ = ["main", "run_eval"]
 
