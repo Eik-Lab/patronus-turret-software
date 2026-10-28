@@ -2,7 +2,7 @@ from collections import Counter
 
 from src.stats.palette import PRIMARY
 
-from .base import Stat
+from . import Stat
 
 
 class ImageSize(Stat):

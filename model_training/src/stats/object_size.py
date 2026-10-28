@@ -3,7 +3,7 @@ from collections import Counter
 from src.stats.palette import EIK_20, EIK_50, EIK_80, STORM_40
 from src.data.size_buckets import SIZE_BUCKETS, empty_counts, size_bucket, size_label
 
-from .base import Stat
+from . import Stat
 
 
 class ObjectSize(Stat):

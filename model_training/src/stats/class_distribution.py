@@ -2,7 +2,7 @@ from collections import Counter
 
 from src.stats.palette import SEQUENCE
 
-from .base import Stat
+from . import Stat
 
 
 class ClassDistribution(Stat):

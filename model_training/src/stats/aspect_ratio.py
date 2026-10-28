@@ -2,7 +2,7 @@ import numpy as np
 
 from src.stats.palette import PRIMARY
 
-from .base import Stat
+from . import Stat
 
 
 class AspectRatio(Stat):

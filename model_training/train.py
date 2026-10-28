@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Configure and launch a single training run."""
 
-from __future__ import annotations
-
 import argparse
 import sys
 

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Train each configured model sequentially."""
 
-from __future__ import annotations
-
 import argparse
 import sys
 

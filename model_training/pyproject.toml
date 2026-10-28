@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.scripts]
-patronus = "src.cli:main"
+patronus = "train:main"
 
 [build-system]
 requires = ["hatchling"]

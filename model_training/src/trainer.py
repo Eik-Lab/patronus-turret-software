@@ -1,7 +1,3 @@
-"""Shared training workflow for the single- and multi-config entry points."""
-
-from __future__ import annotations
-
 import json
 import os
 from pathlib import Path

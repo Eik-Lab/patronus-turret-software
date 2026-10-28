@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
