@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <optional>
+#include <string>
 
 namespace patronus::pipeline {
 namespace {
@@ -57,6 +58,19 @@ namespace {
   /// Consecutive off-period intervals before the average is re-learned.
   constexpr int k_period_relearn_frames = 5;
   constexpr double k_max_frame_interval_s = 0.5;
+
+  /// A frame that took longer than this to reach the probe is assumed to carry a
+  /// PTS on some other base, and its capture time is reported as unavailable.
+  constexpr double k_max_capture_age_s = 1.0;
+
+  /// Usable USB 3 link rate of the ace 2 cameras, bytes/s. With
+  /// `GrabStrategy_LatestImageOnly` frames do not queue, so once exposure ends the
+  /// frame reaches the host after roughly its size over this rate.
+  constexpr double k_usb3_bytes_per_s = 360.0e6;
+
+  /// How often the probe re-reads the exposure time, which auto exposure and the
+  /// operator's exposure commands both change, seconds.
+  constexpr double k_exposure_refresh_s = 1.0;
 
   // Overlay geometry, in muxed pixels. Sizes and colours mirror kalman-cpp's
   // apps/video_track so the two renderings can be compared side by side.
@@ -95,6 +109,13 @@ namespace {
     double capture_s{0.0};
     double period_s{0.0};
     int off_period_frames{0};
+    bool logged_capture_age{false};
+
+    /// Readout and transfer time after exposure, seconds. Set before PLAYING.
+    double readout_s{0.0};
+    /// Current exposure time, seconds, refreshed every `k_exposure_refresh_s`.
+    double exposure_s{0.0};
+    double next_exposure_refresh_s{0.0};
   };
 
   CameraContext g_ctx[2];
@@ -104,6 +125,68 @@ namespace {
   void set_source(CameraContext &ctx, GstElement *source) {
     const std::scoped_lock lock(ctx.source_mutex);
     ctx.source = source;
+  }
+
+  /// Set a pylonsrc child property ("cam::..." or "stream::...") from its string
+  /// form, as gst-launch would. Logs and carries on when the camera has no such
+  /// property: a missing tweak must not stop the pipeline.
+  void set_child_arg(GstElement *source, const char *name, const std::string &value) {
+    GObject *target = nullptr;
+    GParamSpec *pspec = nullptr;
+    if (gst_child_proxy_lookup(GST_CHILD_PROXY(source), name, &target, &pspec) == FALSE) {
+      LOG(Warning, "pylonsrc has no property " << name << "; not set");
+      return;
+    }
+    gst_util_set_object_arg(target, pspec->name, value.c_str());
+    g_object_unref(target);
+    LOG(Info, "pylonsrc " << name << " = " << value);
+  }
+
+  /// Current exposure time of this camera, seconds, or 0.0 when the camera is not
+  /// reachable. A GenICam read over USB: call it rarely, not per frame.
+  double read_exposure_s(CameraContext &ctx) {
+    const std::scoped_lock lock(ctx.source_mutex);
+    if (ctx.source == nullptr)
+      return 0.0;
+    GObject *cam = gst_child_proxy_get_child_by_name(GST_CHILD_PROXY(ctx.source), "cam");
+    if (cam == nullptr)
+      return 0.0;
+    gdouble exposure_us = 0.0;
+    g_object_get(cam, "ExposureTime", &exposure_us, nullptr);
+    g_object_unref(cam);
+    return (exposure_us > 0.0) ? exposure_us * 1.0e-6 : 0.0;
+  }
+
+  /// Readout and transfer time of one frame: `readout_ms` if configured, else
+  /// the frame's bytes, from the source caps, over the USB 3 link rate.
+  double readout_time_s(const config::PipelineConfig &config) {
+    if (config.readout_ms_ > 0.0F)
+      return static_cast<double>(config.readout_ms_) * 1.0e-3;
+
+    GstCaps *caps = gst_caps_from_string(config.camera_caps_.c_str());
+    if (caps == nullptr)
+      return 0.0;
+    double bytes = 0.0;
+    if (gst_caps_get_size(caps) > 0U) {
+      const GstStructure *s = gst_caps_get_structure(caps, 0);
+      gint width = 0;
+      gint height = 0;
+      const gchar *format = gst_structure_get_string(s, "format");
+      if (gst_structure_get_int(s, "width", &width) &&
+          gst_structure_get_int(s, "height", &height)) {
+        // Bytes per pixel of the formats the cameras are run in; anything packed
+        // wider than 8 bits is treated as two bytes.
+        double bpp = 2.0;
+        if (format != nullptr && (g_str_equal(format, "GRAY8") != FALSE))
+          bpp = 1.0;
+        else if (format != nullptr &&
+                 (g_str_equal(format, "RGB") != FALSE || g_str_equal(format, "BGR") != FALSE))
+          bpp = 3.0;
+        bytes = static_cast<double>(width) * static_cast<double>(height) * bpp;
+      }
+    }
+    gst_caps_unref(caps);
+    return bytes / k_usb3_bytes_per_s;
   }
 
   /// Scale the live camera's exposure by `factor`, clamped to [min_us, max_us].
@@ -119,11 +202,16 @@ namespace {
     if (cam == nullptr)
       return;
 
-    gint64 current_us = 0;
+    // ExposureTime is a GenICam float node, exposed by pylonsrc as a gdouble property.
+    // Passing any other type through the varargs get/set silently corrupts the value.
+    gdouble current_us = 0.0;
     g_object_get(cam, "ExposureTime", &current_us, nullptr);
-    const double target_us = std::clamp(static_cast<double>(current_us) * factor, min_us, max_us);
-    g_object_set(cam, "ExposureTime", static_cast<gint64>(std::llround(target_us)), nullptr);
+    const gdouble target_us = std::clamp(current_us * factor, min_us, max_us);
+    g_object_set(cam, "ExposureTime", target_us, nullptr);
     g_object_unref(cam);
+
+    LOG(Info, "Exposure " << (camera == Camera::Rgb ? "rgb" : "mono") << ": " << current_us
+                          << " us -> " << target_us << " us");
   }
 
   constexpr NvOSD_ColorParams k_colour_prediction{1.0, 0.0, 0.0, 1.0};  // red
@@ -390,6 +478,31 @@ namespace {
     return interval;
   }
 
+  /// When a frame was captured (the middle of its exposure), on the steady clock.
+  ///
+  /// pylonsrc stamps the PTS in running time when it retrieves the frame, so on
+  /// the pipeline clock the frame arrived at `base_time + pts`. Its age is
+  /// measured on that clock and subtracted from the steady-clock arrival, so the
+  /// two clocks never have to share an origin. The image itself is older than
+  /// that by the readout and transfer plus half the exposure, which is the part
+  /// that matters to a gimbal turning while the frame is in flight.
+  ///
+  /// @return Capture time in `steady_now_s()` seconds, or 0.0 when the PTS or
+  ///         clock is unavailable or the age is implausible.
+  double captured_at(GstClockTime clock_now, GstClockTime base_time, GstClockTime pts,
+                     double arrival_s, double before_retrieval_s) {
+    if (!GST_CLOCK_TIME_IS_VALID(clock_now) || !GST_CLOCK_TIME_IS_VALID(base_time) ||
+        !GST_CLOCK_TIME_IS_VALID(pts))
+      return 0.0;
+    const GstClockTime produced = base_time + pts;
+    if (produced > clock_now)
+      return 0.0;
+    const double age_s = static_cast<double>(clock_now - produced) * 1.0e-9;
+    if (age_s > k_max_capture_age_s || age_s + before_retrieval_s >= arrival_s)
+      return 0.0;
+    return arrival_s - age_s - before_retrieval_s;
+  }
+
   /// OSD probe: publish what this frame showed to the tracking loop and draw the
   /// filter's prediction. `u_data` is this pipeline's `CameraContext`.
   ///
@@ -398,8 +511,7 @@ namespace {
   /// confident is forwarded, as kalman-cpp's video_track does: the filter tracks
   /// one target, and handing it every box in turn has it chasing whichever came
   /// last.
-  GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad * /*pad*/, GstPadProbeInfo *info,
-                                              gpointer u_data) {
+  GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer u_data) {
     auto *ctx = static_cast<CameraContext *>(u_data);
 
     GstBuffer *buf = reinterpret_cast<GstBuffer *>(info->data);
@@ -409,6 +521,25 @@ namespace {
 
     const double frame_t_s = core::steady_now_s();
 
+    if (frame_t_s >= ctx->next_exposure_refresh_s) {
+      ctx->next_exposure_refresh_s = frame_t_s + k_exposure_refresh_s;
+      if (const double exposure_s = read_exposure_s(*ctx); exposure_s > 0.0)
+        ctx->exposure_s = exposure_s;
+    }
+    const double before_retrieval_s = ctx->readout_s + (0.5 * ctx->exposure_s);
+
+    // Pipeline clock now and base time, to turn each frame's PTS into its age.
+    GstClockTime clock_now = GST_CLOCK_TIME_NONE;
+    GstClockTime base_time = GST_CLOCK_TIME_NONE;
+    if (GstElement *element = gst_pad_get_parent_element(pad); element != nullptr) {
+      if (GstClock *clock = gst_element_get_clock(element); clock != nullptr) {
+        clock_now = gst_clock_get_time(clock);
+        base_time = gst_element_get_base_time(element);
+        gst_object_unref(clock);
+      }
+      gst_object_unref(element);
+    }
+
     for (NvDsMetaList *l_frame = batch_meta->frame_meta_list; l_frame != nullptr;
          l_frame = l_frame->next) {
       auto *frame_meta = static_cast<NvDsFrameMeta *>(l_frame->data);
@@ -417,7 +548,18 @@ namespace {
       obs.timestamp_s_ = frame_t_s;
       obs.frame_dt_s_ = advance_capture_clock(*ctx, GST_BUFFER_PTS(buf), frame_t_s);
       obs.capture_s_ = ctx->capture_s;
+      obs.captured_at_s_ =
+        captured_at(clock_now, base_time, frame_meta->buf_pts, frame_t_s, before_retrieval_s);
+      obs.readout_s_ = ctx->readout_s;
+      obs.exposure_s_ = ctx->exposure_s;
       obs.frame_id_ = ++ctx->frame_id;
+      if (!ctx->logged_capture_age && obs.captured_at_s_ > 0.0) {
+        ctx->logged_capture_age = true;
+        LOG(Info, "Frame age at the tracking hand-off: "
+                    << ((frame_t_s - obs.captured_at_s_) * 1.0e3) << " ms (readout "
+                    << (ctx->readout_s * 1.0e3) << " ms, exposure " << (ctx->exposure_s * 1.0e3)
+                    << " ms)");
+      }
 
       guint drone_count = 0;
       for (NvDsMetaList *l_obj = frame_meta->obj_meta_list; l_obj != nullptr; l_obj = l_obj->next) {
@@ -547,6 +689,13 @@ namespace {
     }
 
     g_object_set(G_OBJECT(source), "device-serial-number", config.camera_serial_.c_str(), nullptr);
+    if (config.binning_ > 1U) {
+      const std::string factor = std::to_string(config.binning_);
+      set_child_arg(source, "cam::BinningHorizontal-Sensor", factor);
+      set_child_arg(source, "cam::BinningVertical-Sensor", factor);
+    }
+    if (config.grab_buffers_ > 0U)
+      set_child_arg(source, "stream::MaxNumBuffer", std::to_string(config.grab_buffers_));
 
     GstCaps *caps_src = gst_caps_from_string(config.camera_caps_.c_str());
     g_object_set(G_OBJECT(capsfilter_src), "caps", caps_src, nullptr);
@@ -640,6 +789,9 @@ namespace {
     }
 
     LOG(Info, "Using pylonsrc (Basler camera serial " << config.camera_serial_ << ')');
+    ctx->readout_s = readout_time_s(config);
+    ctx->exposure_s = 0.0;
+    ctx->next_exposure_refresh_s = 0.0;
     gst_element_set_state(pipeline, GST_STATE_PLAYING);
     set_source(*ctx, source);
     return pipeline;

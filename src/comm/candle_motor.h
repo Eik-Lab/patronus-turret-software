@@ -56,7 +56,9 @@ public:
   ///        would push a calibrated axis further past its software limit is
   ///        zeroed (moving away from the limit is always allowed), which
   ///        costs one position read per axis on the bus.
-  void set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
+  /// @return The pan/tilt velocity actually sent to the drives, rad/s, after
+  ///         scaling, clamping and limits; zeros when nothing was sent.
+  std::pair<float, float> set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
 
   /// @brief Read back actual motor velocities for a specific gimbal.
   /// @return Pair of (pan_rad_s, tilt_rad_s).

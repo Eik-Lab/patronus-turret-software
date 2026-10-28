@@ -31,6 +31,24 @@ struct PipelineConfig {
 
   /// Look-ahead horizon for the drawn velocity arrow, seconds.
   float prediction_lead_s_{0.15f};
+
+  /// Time from the end of exposure until the frame has arrived on the host, ms:
+  /// the sensor readout and USB transfer. pylonsrc stamps a frame's PTS only
+  /// once it has arrived, so this (plus half the exposure) is subtracted to find
+  /// when the image was actually taken. 0 or less computes it from the caps as
+  /// frame bytes over the USB 3 link rate.
+  float readout_ms_{0.0f};
+
+  /// Sensor binning, the same factor horizontally and vertically (1 = none).
+  /// The field of view is unchanged, so the focal lengths in detection pixels
+  /// are too; `camera_caps` must give the binned size.
+  uint32_t binning_{1};
+
+  /// Most frames the Pylon stream grabber may hold, 0 for its default (16).
+  /// When the camera delivers as fast as the pipeline consumes, any backlog
+  /// in those buffers never drains and every frame arrives that much late; a
+  /// small pool makes the camera drop frames instead.
+  uint32_t grab_buffers_{0};
 };
 
 /// @brief Velocity-PID gains for one motor axis (VELOCITY_PID mode).
@@ -93,11 +111,20 @@ struct TrackingConfig {
   /// estimate that has long since drifted away. 0 disables.
   int filter_max_coast_ms_{1000};
 
-  /// Age of a detection at the moment it reaches the tracking loop, in ms.
+  /// Age of a frame when it reaches the tracking loop, in ms. Only a fallback
+  /// for frames without a usable PTS: the pipeline normally measures the age of
+  /// every frame, and the filter looks the gimbal pose up at that capture time.
   int filter_pipeline_latency_ms_{20};
-  /// Longest capture-to-control extrapolation, ms. Caps how far ahead the
-  /// aim point is predicted, including while coasting between detections.
+  /// Longest capture-to-control extrapolation of the target's motion, ms. Caps
+  /// how far ahead the aim point is predicted, including while coasting between
+  /// detections. The gimbal's own rotation is measured, so it is never capped.
   int filter_max_lead_ms_{250};
+  /// How long the gimbal keeps turning at its current rate after a velocity
+  /// command, ms: the drive's velocity loop, the inertia and the CAN round trip.
+  /// The aim error is predicted this far ahead along the gimbal's measured rate,
+  /// so a command never asks for rotation the gimbal is already going to make.
+  /// 0 aims at the pose at the control instant.
+  int filter_actuation_latency_ms_{0};
 
   // --- Control law -------------------------------------------------------
   float kp_{0.006f};      ///< Proportional gain (per pixel of error).
@@ -125,6 +152,12 @@ struct CommandConfig {
   uint16_t command_port_;    ///< UDP port to listen on for commands.
 };
 
+/// @brief Tracking telemetry: per-frame and per-tick CSV logs for tuning.
+struct TelemetryConfig {
+  bool enabled_{false};          ///< Write telemetry at all.
+  std::string dir_{"telemetry"}; ///< Parent directory; each run gets a subdirectory.
+};
+
 /// @brief Top-level system configuration.
 struct SystemConfig {
   std::string mode_{"both"};                 ///< Pipeline mode: "both", "rgb", or "mono".
@@ -134,6 +167,7 @@ struct SystemConfig {
   PipelineConfig mono_;                      ///< Mono pipeline config.
   SensorConfig sensor_;                      ///< Sensor module config.
   CommandConfig command_;                    ///< UDP command listener config.
+  TelemetryConfig telemetry_;                ///< Tracking telemetry logs.
   CanBusConfig can_bus_;                     ///< Shared CAN bus settings.
   std::vector<GimbalConfig> gimbals_;        ///< Per-gimbal CAN + limits.
   std::vector<TrackingConfig> tracking_cfg_; ///< Per-gimbal tracking params.

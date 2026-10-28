@@ -85,6 +85,23 @@ struct FrameObservation {
   /// noise. 0.0 means unavailable.
   double capture_s_{0.0};
 
+  /// When the image was taken (mid-exposure), `steady_now_s()` seconds: the
+  /// buffer PTS, which pylonsrc stamps on arrival, carried over to the steady
+  /// clock and moved back by the readout/transfer time and half the exposure
+  /// (`PipelineConfig::readout_ms_`). Unlike
+  /// `capture_s_` this is an absolute instant, and it is what the filter looks
+  /// the gimbal pose up at. `timestamp_s_` is too late for that: it is taken
+  /// after inference, by which time a slewing gimbal has turned further. 0.0
+  /// means unavailable, and the filter falls back to `timestamp_s_` minus
+  /// `filter_pipeline_latency_ms`.
+  double captured_at_s_{0.0};
+
+  /// Readout/transfer time and exposure that `captured_at_s_` was moved back
+  /// by (the latter halved), seconds. Kept so telemetry can recompute the
+  /// capture instant offline with a different `readout_ms`.
+  double readout_s_{0.0};
+  double exposure_s_{0.0};
+
   /// Interval since the previous frame on the capture clock, seconds. 0.0 on the
   /// first frame.
   double frame_dt_s_{0.0};
