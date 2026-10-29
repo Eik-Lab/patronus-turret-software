@@ -1,5 +1,6 @@
 #pragma once
 
+#include "comm/motor_result.h"
 #include "core/config.h"
 #include "core/types.h"
 
@@ -38,25 +39,31 @@ public:
   }
 
   /// Scales, clamps and applies soft limits, then commands the drives.
-  /// Returns what was sent. Hot path.
-  std::pair<float, float> set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s);
+  /// SDK write success does not confirm physical motion. Hot path.
+  MotorCommand set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s,
+                            BusMetrics *metrics = nullptr);
 
-  /// A failed read returns 0.
-  std::pair<float, float> get_velocity(size_t gimbal);
-  std::pair<float, float> get_position(size_t gimbal);
+  /// Per-axis status and host exchange timestamps; failed values are NaN.
+  MotorReading get_velocity(size_t gimbal, BusMetrics *metrics = nullptr);
+  MotorReading get_position(size_t gimbal, BusMetrics *metrics = nullptr);
 
   /// For axes with calibrate_on_boot_: drive into both end stops to find soft
   /// limits, then park at the centre, which becomes home. Blocks up to ~70 s
   /// per axis; call before tracking starts. Failed axes are left disabled.
   [[nodiscard]] bool boot_sequence();
 
-  bool return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
-                      float max_velocity_rad_s = 0.0F);
+  MotionResult return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
+                              float max_velocity_rad_s, double max_pose_age_s,
+                              BusMetrics *metrics = nullptr);
 
-  /// One P-control step toward a pose; true once within tolerance.
+  /// One P-control step. Invalid/stale reads request zero velocity, never arrival.
+  /// reached() requires an in-tolerance measurement and successful command writes.
+  /// Holds the bus lock through feedback, computation, limit reads and writes.
+  /// Feedback reuse is disabled: soft limits always acquire separate readings.
   /// max_velocity_rad_s 0 means the gimbal's max.
-  bool drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
-                float tolerance_rad, float max_velocity_rad_s = 0.0F);
+  MotionResult drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                        float tolerance_rad, float max_velocity_rad_s, double max_pose_age_s,
+                        BusMetrics *metrics = nullptr);
 
   /// Centre of the calibrated range, or 0 for an uncalibrated axis.
   std::pair<float, float> home_position(size_t gimbal) const;
@@ -80,6 +87,10 @@ private:
   };
 
   // The helpers below expect bus_mutex_ held.
+  MotorReading get_position_locked(size_t gimbal, BusMetrics *metrics);
+  MotorCommand set_velocity_locked(size_t gimbal, float pan_rad_s, float tilt_rad_s,
+                                   BusMetrics *metrics);
+
   bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step, float max_lead,
                     float &barrier_pos);
 
@@ -94,7 +105,8 @@ private:
 
   void wait_feeding(const mab::MD *active, int ms);
 
-  float apply_limit(mab::MD *md, const SoftLimit &limit, float velocity);
+  float apply_limit(mab::MD *md, const SoftLimit &limit, float velocity, AxisReading &position,
+                    BusMetrics *metrics);
 
   config::CanBusConfig bus_cfg_;
   std::vector<config::GimbalConfig> gimbals_;

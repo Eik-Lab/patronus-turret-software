@@ -61,6 +61,7 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   cfg.udp_host_ = read_string(kf, group, "udp_host", "127.0.0.1");
   cfg.udp_port_ = read_uint<uint16_t>(kf, group, "udp_port", 5000);
   cfg.encoder_bitrate_ = read_uint<uint32_t>(kf, group, "encoder_bitrate", 3000);
+  cfg.encoder_backend_ = read_string(kf, group, "encoder_backend", "x264");
   cfg.muxer_width_ = read_uint<uint32_t>(kf, group, "muxer_width", 1920);
   cfg.muxer_height_ = read_uint<uint32_t>(kf, group, "muxer_height", 1088);
   cfg.focal_x_px_ = read_float(kf, group, "focal_x_px", 0.0F);

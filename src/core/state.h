@@ -50,6 +50,7 @@ struct FrameObservation {
   double exposure_s_{0.0};
 
   double frame_dt_s_{0.0};
+  double published_s_{0.0}; ///< Just before publishing to the observation channel.
 
   uint64_t frame_id_{0};
 
@@ -57,11 +58,14 @@ struct FrameObservation {
   std::optional<Detection> detection_;
 };
 
-/// Single-slot mailbox; push overwrites.
+/// Single-slot broadcast; push overwrites. Slow readers skip superseded values.
+/// Each reader owns a cursor initialized to zero, used with this channel only.
+/// Reads copy the latest value without consuming it for other readers.
 template <typename T>
 class LatestValue {
 private:
   std::optional<T> slot_;
+  uint64_t sequence_{0};
   std::mutex mtx_;
   std::condition_variable cv_;
 
@@ -70,19 +74,20 @@ public:
     {
       std::scoped_lock lock(mtx_);
       slot_ = std::move(value);
+      ++sequence_;
     }
-    cv_.notify_one();
+    cv_.notify_all();
   }
 
   template <typename Rep, typename Period>
-  std::optional<T> try_pop(const std::chrono::duration<Rep, Period> &timeout) {
+  std::optional<T> try_read(uint64_t &cursor, const std::chrono::duration<Rep, Period> &timeout) {
     std::unique_lock<std::mutex> lock(mtx_);
-    if (!cv_.wait_for(lock, timeout, [this]() {
-          return slot_.has_value();
+    if (!cv_.wait_for(lock, timeout, [this, &cursor]() {
+          return slot_.has_value() && sequence_ != cursor;
         }))
       return std::nullopt;
-    T value = std::move(*slot_);
-    slot_.reset();
+    T value = *slot_;
+    cursor = sequence_;
     return value;
   }
 

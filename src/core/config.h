@@ -14,6 +14,7 @@ struct PipelineConfig {
   std::string udp_host_;
   uint16_t udp_port_{5000};
   uint32_t encoder_bitrate_{3000};
+  std::string encoder_backend_{"x264"}; ///< x264 or thor; bitrate remains in kbps.
   uint32_t muxer_width_{1920};
   uint32_t muxer_height_{1088};
   bool enabled_{true};

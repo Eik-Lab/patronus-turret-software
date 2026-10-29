@@ -15,6 +15,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
+option(PATRONUS_REPLAY_ONLY "Build hardware-independent tracking replay only"
+       OFF)
+
 # Jetson AGX Thor is Blackwell, sm_11.0. Override with
 # -DCMAKE_CUDA_ARCHITECTURES=native to build for the local GPU instead.
 if(CMAKE_CUDA_COMPILER)
@@ -56,7 +59,7 @@ set(CANDLE_BUILD_STATIC
 
 FetchContent_Declare(
   kalman_cpp
-  GIT_REPOSITORY git@github.com:ioeftedal/kalman-cpp.git
+  GIT_REPOSITORY https://github.com/ioeftedal/kalman-cpp.git
   GIT_TAG d7c6fd2ce4b8b9b683c5c76ac8bb4ce5da4bcdef
   EXCLUDE_FROM_ALL)
 set(KALMAN_BUILD_TESTS
@@ -76,6 +79,41 @@ if(NOT Eigen3_FOUND AND NOT TARGET Eigen3::Eigen)
       "  nix develop                       # the flake devShell provides eigen\n"
       "  sudo apt-get install libeigen3-dev\n"
       "  -DEigen3_DIR=/path/to/eigen/share/eigen3/cmake")
+endif()
+
+if(PATRONUS_REPLAY_ONLY)
+  FetchContent_MakeAvailable(kalman_cpp)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+  add_executable(
+    tracking_replay
+    src/tools/tracking_replay.cpp src/core/config.cpp
+    src/tracking/target_filter.cpp src/tracking/aim_control.cpp
+    src/tracking/control_state.cpp)
+  target_include_directories(tracking_replay PRIVATE src)
+  target_link_libraries(tracking_replay PRIVATE kalman::kalman PkgConfig::GLIB)
+  find_package(Threads REQUIRED)
+  add_executable(telemetry_fixture tools/test_telemetry.cpp
+                                   src/tracking/telemetry.cpp)
+  target_include_directories(telemetry_fixture PRIVATE src)
+  target_link_libraries(telemetry_fixture PRIVATE Threads::Threads
+                                                  kalman::kalman)
+  enable_testing()
+  add_executable(observation_channel_test tools/test_observation_channel.cpp)
+  target_include_directories(observation_channel_test PRIVATE src)
+  target_link_libraries(observation_channel_test PRIVATE Threads::Threads)
+  add_test(NAME observation_channel COMMAND observation_channel_test)
+  add_executable(motor_result_test tools/test_motor_result.cpp src/tracking/control_state.cpp)
+  target_include_directories(motor_result_test PRIVATE src)
+  add_test(NAME motor_result COMMAND motor_result_test)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(
+    NAME tracking_replay
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tracking_replay.py
+      $<TARGET_FILE:tracking_replay> $<TARGET_FILE:telemetry_fixture>)
+  return()
 endif()
 
 set(DS_VERSION 8.0)

@@ -14,6 +14,7 @@
 #include "core/state.h"
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
+#include "pipeline/video_encoder.h"
 #include "tracking/prediction_overlay.h"
 
 #include "gstnvdsmeta.h"
@@ -494,8 +495,10 @@ namespace {
         obs.detection_ = det;
       }
 
-      if (ctx->output != nullptr)
+      if (ctx->output != nullptr) {
+        obs.published_s_ = core::steady_now_s();
         ctx->output->push(obs);
+      }
 
       OsdWriter osd(batch_meta, frame_meta);
 
@@ -567,6 +570,10 @@ namespace {
 
     GstElement *pipeline =
       gst_pipeline_new(camera == Camera::Rgb ? "patronus-rgb-pipeline" : "patronus-mono-pipeline");
+    GstElement *encoder = make_video_encoder(config);
+    if (encoder == nullptr)
+      return fail(pipeline);
+    gst_bin_add(GST_BIN(pipeline), encoder);
 
     GstElement *source = gst_element_factory_make("pylonsrc", "pylon-source");
     GstElement *capsfilter_src = gst_element_factory_make("capsfilter", "caps-src");
@@ -576,15 +583,12 @@ namespace {
     GstElement *nvosd = gst_element_factory_make("nvdsosd", "nv-onscreendisplay");
     GstElement *nvvidconv_post =
       gst_element_factory_make("nvvideoconvert", "nvvideo-converter-post");
-    GstElement *capsfilter_encoder = gst_element_factory_make("capsfilter", "caps-encoder");
-    GstElement *encoder = gst_element_factory_make("x264enc", "encoder");
     GstElement *payload_encode = gst_element_factory_make("rtph264pay", "payload_encode");
     GstElement *udp_sink = gst_element_factory_make("udpsink", "udp-sink");
 
     if (pipeline == nullptr || source == nullptr || capsfilter_src == nullptr ||
         nvvidconv_pre == nullptr || streammux == nullptr || nvvidconv == nullptr ||
-        nvosd == nullptr || nvvidconv_post == nullptr || capsfilter_encoder == nullptr ||
-        encoder == nullptr || payload_encode == nullptr || udp_sink == nullptr) {
+        nvosd == nullptr || nvvidconv_post == nullptr || payload_encode == nullptr || udp_sink == nullptr) {
       LOG(Error, "One element could not be created. Exiting.");
       return fail(pipeline);
     }
@@ -601,14 +605,6 @@ namespace {
     GstCaps *caps_src = gst_caps_from_string(config.camera_caps_.c_str());
     g_object_set(G_OBJECT(capsfilter_src), "caps", caps_src, nullptr);
     gst_caps_unref(caps_src);
-
-    GstCaps *caps_encoder = gst_caps_from_string("video/x-raw,format=I420");
-    g_object_set(G_OBJECT(capsfilter_encoder), "caps", caps_encoder, nullptr);
-    gst_caps_unref(caps_encoder);
-
-    g_object_set(G_OBJECT(encoder), "bitrate", config.encoder_bitrate_, nullptr);
-    gst_util_set_object_arg(G_OBJECT(encoder), "tune", "zerolatency");
-    gst_util_set_object_arg(G_OBJECT(encoder), "speed-preset", "superfast");
 
     g_object_set(G_OBJECT(payload_encode), "config-interval", -1, nullptr);
 
@@ -647,7 +643,7 @@ namespace {
     gst_object_unref(bus);
 
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-                     nvvidconv, nvosd, nvvidconv_post, capsfilter_encoder, encoder, payload_encode,
+                     nvvidconv, nvosd, nvvidconv_post, payload_encode,
                      udp_sink, nullptr);
     LOG(Debug, "Added elements to bin");
 
@@ -672,7 +668,7 @@ namespace {
 
     if (!gst_element_link_many(source, capsfilter_src, nvvidconv_pre, nullptr) ||
         !gst_element_link_many(streammux, pgie, nvvidconv, nvosd, nvvidconv_post,
-                               capsfilter_encoder, encoder, payload_encode, udp_sink, nullptr)) {
+                               encoder, payload_encode, udp_sink, nullptr)) {
       LOG(Error, "Elements could not be linked. Exiting.");
       return fail(pipeline);
     }

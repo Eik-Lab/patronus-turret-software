@@ -45,7 +45,9 @@ set(INFERENCE_SOURCES
     main.cpp
     core/config.cpp
     pipeline/inference.cpp
+    pipeline/video_encoder.cpp
     tracking/aim_control.cpp
+    tracking/control_state.cpp
     tracking/target_filter.cpp
     tracking/prediction_overlay.cpp
     tracking/telemetry.cpp
@@ -59,11 +61,14 @@ set(INFERENCE_HEADERS
     core/types.h
     pipeline/inference_mono.h
     pipeline/inference_rgb.h
+    pipeline/video_encoder.h
     tracking/aim_control.h
+    tracking/control_state.h
     tracking/prediction_overlay.h
     tracking/telemetry.h
     tracking/target_filter.h
     comm/candle_motor.h
+    comm/motor_result.h
     comm/command_listener.h
     comm/sensor_module.h)
 
@@ -111,7 +116,8 @@ find_path(
   PATHS /opt/pylon/lib
   NO_DEFAULT_PATH)
 if(PYLON_INCLUDE_DIR AND PYLON_LIB_DIR)
-  add_executable(focal_calib tools/focal_calib.cpp core/config.cpp comm/candle_motor.cpp)
+  add_executable(focal_calib tools/focal_calib.cpp core/config.cpp
+                             comm/candle_motor.cpp)
   target_include_directories(
     focal_calib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} /usr/include/glib-2.0
                         /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)
