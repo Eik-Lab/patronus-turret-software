@@ -115,7 +115,13 @@ int main() {
       result = drive();
       expect_zero();
       require(!result.reached(), "failed read reported arrival");
-      require(reads == (failure <= 2 ? 2U : 4U), "unexpected read retry");
+      require(reads == failure, "read continued after unusable feedback");
+      if (failure == 1)
+        require(result.position.tilt.status == IoStatus::NotAttempted,
+                "skipped tilt read reported as attempted");
+      if (failure == 3)
+        require(result.command.tilt.limit_position.status == IoStatus::NotAttempted,
+                "skipped tilt limit read reported as attempted");
       if (failure > 2)
         require(!result.command.ok(), "limit error lost");
     }
@@ -140,6 +146,29 @@ int main() {
     result = motor->return_to_home(0, 1, .01F, 1, 60);
     require(result.command.ok() && !result.reached() && reads == 4 && writes == 2,
             "home transaction failed");
+    // Home arrival requests a hold directly, not a corrective velocity followed
+    // by another pair of stops. Ordinary follower drive_to retains its P-control.
+    motor->pan_limits_[0].home_pos = .22F;
+    motor->tilt_limits_[0].home_pos = -.31F;
+    reset();
+    result = motor->return_to_home(0, 1, .03F, 1, 60);
+    require(result.reached() && reads == 2, "home arrival performed unnecessary limit reads");
+    expect_zero();
+    reset();
+    result = motor->drive_to(0, .22F, -.31F, 1, .03F, 1, 60);
+    require(result.reached() && reads == 4 && commands[0].velocity > 0 && commands[1].velocity < 0,
+            "follower corrections were replaced by a home deadband");
+    reset();
+    result = motor->return_to_home(0, 1, .015F, 1, 60);
+    require(!result.reached() && reads == 4 && commands[0].velocity > 0,
+            "home motion stopped outside tolerance");
+    for (unsigned failure : {1U, 2U}) {
+      reset();
+      fail_write = failure;
+      result = motor->return_to_home(0, 1, .03F, 1, 60);
+      require(!result.reached() && reads == 2, "failed home hold reported arrival");
+      expect_zero();
+    }
     reset();
     result = motor->drive_to(99, 0, 0, 1, .01F, 1, 60);
     require(!result.reached() && reads == 0 && writes == 0 &&

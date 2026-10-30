@@ -44,6 +44,7 @@ public:
                             BusMetrics *metrics = nullptr);
 
   /// Per-axis status and host exchange timestamps; failed values are NaN.
+  /// Position reads stop on pan failure; tilt then remains NotAttempted.
   MotorReading get_velocity(size_t gimbal, BusMetrics *metrics = nullptr);
   MotorReading get_position(size_t gimbal, BusMetrics *metrics = nullptr);
 
@@ -52,6 +53,7 @@ public:
   /// per axis; call before tracking starts. Failed axes are left disabled.
   [[nodiscard]] bool boot_sequence();
 
+  /// Requests paired zero velocity inside tolerance; reached() requires both writes.
   MotionResult return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                               float max_velocity_rad_s, double max_pose_age_s,
                               BusMetrics *metrics = nullptr);
@@ -90,6 +92,9 @@ private:
   MotorReading get_position_locked(size_t gimbal, BusMetrics *metrics);
   MotorCommand set_velocity_locked(size_t gimbal, float pan_rad_s, float tilt_rad_s,
                                    BusMetrics *metrics);
+  MotionResult drive_to_locked(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
+                               float tolerance_rad, float max_velocity_rad_s, double max_pose_age_s,
+                               bool stop_at_target, BusMetrics *metrics);
 
   bool find_barrier(mab::MD *md, uint16_t node_id, float direction, float step, float max_lead,
                     float &barrier_pos);

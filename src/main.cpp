@@ -482,11 +482,7 @@ int main(int argc, char *argv[]) {
             const bool reached_home = home_result.reached();
             tick_rec.reached_home = reached_home;
             const bool arrived = patronus::tracking::apply_home_feedback(control, reached_home);
-            if (arrived) {
-              const auto stop = motor->set_velocity(g, 0.0F, 0.0F, bus_metrics);
-              tick_rec.command.stop_pan = stop.pan;
-              tick_rec.command.stop_tilt = stop.tilt;
-            }
+            // return_to_home reports arrival only after its paired hold succeeds.
             if (telemetry)
               tick_rec.command_done_s = patronus::core::steady_now_s();
             if (arrived)
