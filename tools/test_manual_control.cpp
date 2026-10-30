@@ -61,7 +61,7 @@ static void test_control() {
   auto decision = step_control(state, params, input);
   require(decision.phase == ControlPhase::Manual, "manual phase not reported");
   require(decision.leader == MotorAction::Manual, "leader not manual");
-  require(decision.followers == MotorAction::Manual, "followers not manual");
+  require(decision.followers == MotorAction::Mirror, "followers not mirroring");
   require(!decision.aiming, "aiming in manual");
 
   input.pose_usable = false;

@@ -169,6 +169,23 @@ int main() {
       require(!result.reached() && reads == 2, "failed home hold reported arrival");
       expect_zero();
     }
+    // Mirroring copies the leader's velocity and corrects the pose error, without a deadband.
+    motor->gimbals_[0].pan_velocity_scale_ = .5F;
+    reset();
+    result = motor->mirror_pose(0, .7F, -.8F, .1F, -.2F, .1F, 60);
+    require(result.command.ok() && reads == 4 && writes == 2, "mirror transaction failed");
+    require(std::abs(commands[0].velocity - .125F) < 1e-6F &&
+              std::abs(commands[1].velocity + .25F) < 1e-6F,
+            "mirror velocity changed");
+    motor->gimbals_[0].pan_velocity_scale_ = 0.0F;
+    reset();
+    result = motor->mirror_pose(0, .2F, -.3F, 1.0F, 0.0F, 1, 60);
+    require(result.command.ok() && commands[0].velocity == 0, "zero scale produced motion");
+    motor->gimbals_[0].pan_velocity_scale_ = 1.0F;
+    reset();
+    result = motor->mirror_pose(0, .7F, -.8F, .1F, -.2F, 1, 0);
+    expect_zero();
+    require(reads == 2, "mirror moved on stale feedback");
     reset();
     result = motor->drive_to(99, 0, 0, 1, .01F, 1, 60);
     require(!result.reached() && reads == 0 && writes == 0 &&

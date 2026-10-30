@@ -626,6 +626,34 @@ MotionResult CandleMotor::drive_to_locked(size_t gimbal, float pan_rad, float ti
   return result;
 }
 
+MotionResult CandleMotor::mirror_pose(size_t gimbal, float pan_rad, float tilt_rad,
+                                      float pan_velocity_rad_s, float tilt_velocity_rad_s,
+                                      float position_gain, double max_pose_age_s,
+                                      BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  MotionResult result;
+  result.position = get_position_locked(gimbal, metrics);
+  if (!result.position.fresh(core::steady_now_s(), max_pose_age_s)) {
+    result.command = set_velocity_locked(gimbal, 0.0F, 0.0F, metrics);
+    return result;
+  }
+
+  const auto &cfg = gimbals_[gimbal];
+  const float limit = cfg.max_velocity_rad_s_;
+  // set_velocity_locked scales again, so undo it for a velocity that is already scaled.
+  const auto unscaled = [](float velocity, float scale) {
+    return scale > 0.0F ? velocity / scale : 0.0F;
+  };
+  const float pan_vel =
+    unscaled(pan_velocity_rad_s, cfg.pan_velocity_scale_) +
+    std::clamp((pan_rad - result.position.pan.value) * position_gain, -limit, limit);
+  const float tilt_vel =
+    unscaled(tilt_velocity_rad_s, cfg.tilt_velocity_scale_) +
+    std::clamp((tilt_rad - result.position.tilt.value) * position_gain, -limit, limit);
+  result.command = set_velocity_locked(gimbal, pan_vel, tilt_vel, metrics);
+  return result;
+}
+
 mab::MD *CandleMotor::pan_motor(size_t gimbal) {
   if (gimbal >= gimbals_.size())
     return nullptr;

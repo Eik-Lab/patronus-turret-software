@@ -67,6 +67,14 @@ public:
                         float tolerance_rad, float max_velocity_rad_s, double max_pose_age_s,
                         BusMetrics *metrics = nullptr);
 
+  /// One step of following another gimbal: its velocity (drive rad/s, as written to its
+  /// drives) plus P-control on the pose error, with no deadband. position_gain and its
+  /// clamp at the gimbal's max are before velocity scaling. Same feedback, stale-read
+  /// and locking rules as drive_to.
+  MotionResult mirror_pose(size_t gimbal, float pan_rad, float tilt_rad, float pan_velocity_rad_s,
+                           float tilt_velocity_rad_s, float position_gain, double max_pose_age_s,
+                           BusMetrics *metrics = nullptr);
+
   /// Centre of the calibrated range, or 0 for an uncalibrated axis.
   std::pair<float, float> home_position(size_t gimbal) const;
 

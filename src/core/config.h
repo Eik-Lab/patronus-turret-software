@@ -58,7 +58,7 @@ struct GimbalConfig {
   float pan_max_velocity_rad_s_{6.28F};
   float tilt_max_velocity_rad_s_{6.28F};
 
-  /// 1-based leader index, or 0. A follower aims at its leader's bearing.
+  /// 1-based leader index, or 0. A follower mirrors its leader's pose.
   uint16_t follow_{0};
   float follow_gain_{5.0F};
   float pan_offset_rad_{0.0F};

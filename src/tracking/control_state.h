@@ -8,7 +8,7 @@ namespace patronus::tracking {
 
 // Values are part of the telemetry/replay format.
 enum class ControlPhase { Tracking, ReturningHome, AtHome, Manual };
-enum class MotorAction { None, Aim, Hold, ReturnHome, Manual };
+enum class MotorAction { None, Aim, Hold, ReturnHome, Manual, Mirror };
 
 struct ControlParameters {
   int64_t stale_after_ns;

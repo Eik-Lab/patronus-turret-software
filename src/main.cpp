@@ -171,8 +171,7 @@ int main(int argc, char *argv[]) {
         leaders.push_back(g);
       } else {
         followers[cfg.gimbals_[g].follow_ - 1U].push_back(g);
-        LOG(Info,
-            "Gimbal " << g << " follows gimbal " << (cfg.gimbals_[g].follow_ - 1U) << "'s camera");
+        LOG(Info, "Gimbal " << g << " mirrors gimbal " << (cfg.gimbals_[g].follow_ - 1U));
       }
     }
 
@@ -224,14 +223,6 @@ int main(int argc, char *argv[]) {
                             "motion. Set these from the camera's lens and sensor specs.");
         }
 
-        // Followers aim at the leader's bearing, measured from each gimbal's home.
-        const bool lead_followers =
-          driving && !follower_ids.empty() && pipe.focal_x_px_ > 0.0F && pipe.focal_y_px_ > 0.0F;
-        if (driving && !follower_ids.empty() && !lead_followers) {
-          LOG(Warning, "Tracking gimbal " << g
-                                          << ": no focal length set, so its followers cannot be "
-                                             "aimed — they stay at home");
-        }
         std::pair<float, float> pose{0.0F, 0.0F};
         const double max_pose_age_s = static_cast<double>(trk.filter_tick_ms_) * 45 * 0.001;
         patronus::tracking::TickRecord tick_rec;
@@ -247,34 +238,29 @@ int main(int argc, char *argv[]) {
           telemetry->note(note.str());
         }
 
-        const auto aim_followers = [&](patronus::core::Point error_px) {
-          if (!lead_followers)
-            return;
+        // Same offset from home as the leader, plus its velocity so the pointer does
+        // not wait for an error to build up.
+        const auto mirror_followers = [&]() {
           const double start = telemetry ? patronus::core::steady_now_s() : 0.0;
-          const float pan = pose.first - home.first + std::atan(error_px.cx_ / pipe.focal_x_px_);
-          const float tilt = pose.second - home.second + std::atan(error_px.cy_ / pipe.focal_y_px_);
+          const bool moving = tick_rec.command.ok();
+          const float pan_velocity = moving ? tick_rec.command.pan.attempted : 0.0F;
+          const float tilt_velocity = moving ? tick_rec.command.tilt.attempted : 0.0F;
           for (const size_t f : follower_ids) {
             const auto &fc = all_gimbals[f];
             const auto [f_pan, f_tilt] = motor->home_position(f);
-            motor->drive_to(f, f_pan + fc.pan_offset_rad_ + pan,
-                            f_tilt + fc.tilt_offset_rad_ + tilt, fc.follow_gain_,
-                            trk.home_tolerance_rad_, 0.0F, max_pose_age_s, bus_metrics);
+            motor->mirror_pose(f, f_pan + fc.pan_offset_rad_ + pose.first - home.first,
+                               f_tilt + fc.tilt_offset_rad_ + pose.second - home.second,
+                               pan_velocity, tilt_velocity, fc.follow_gain_, max_pose_age_s,
+                               bus_metrics);
           }
-          if (telemetry)
+          if (telemetry && !follower_ids.empty())
             tick_rec.follower_us += (patronus::core::steady_now_s() - start) * 1e6;
         };
 
-        const auto park_followers = [&](bool hold) {
-          if (!driving)
-            return;
+        const auto hold_followers = [&]() {
           const double start = telemetry ? patronus::core::steady_now_s() : 0.0;
-          for (const size_t f : follower_ids) {
-            if (hold)
-              motor->set_velocity(f, 0.0F, 0.0F, bus_metrics);
-            else
-              motor->return_to_home(f, trk.home_return_gain_, trk.home_tolerance_rad_,
-                                    trk.home_return_max_velocity_, max_pose_age_s, bus_metrics);
-          }
+          for (const size_t f : follower_ids)
+            motor->set_velocity(f, 0.0F, 0.0F, bus_metrics);
           if (telemetry && !follower_ids.empty())
             tick_rec.follower_us += (patronus::core::steady_now_s() - start) * 1e6;
         };
@@ -440,10 +426,6 @@ int main(int argc, char *argv[]) {
               if (telemetry)
                 tick_rec.command_done_s = patronus::core::steady_now_s();
               tick_rec.aim = aim;
-              if (tick_rec.command.ok())
-                aim_followers(aim->error_now_px);
-              else
-                park_followers(true);
             } else if (telemetry) {
               tick_rec.aim_compute_us = (patronus::core::steady_now_s() - tick_rec.aim_s) * 1e6;
             }
@@ -465,10 +447,6 @@ int main(int argc, char *argv[]) {
                                   raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_, bus_metrics);
             if (telemetry)
               tick_rec.command_done_s = patronus::core::steady_now_s();
-            if (tick_rec.command.ok())
-              aim_followers(error);
-            else
-              park_followers(true);
           } else if (decision.leader == MotorAction::Manual) {
             const auto cmd = manual_control.command(patronus::core::steady_now_s(),
                                                     trk.manual_timeout_ms_ * 0.001);
@@ -479,20 +457,10 @@ int main(int argc, char *argv[]) {
               motor->set_velocity(g, cmd.pan_ * speed, cmd.tilt_ * speed, bus_metrics);
             if (telemetry)
               tick_rec.command_done_s = patronus::core::steady_now_s();
-            // Followers point where the operator points.
-            if (tick_rec.command.ok())
-              aim_followers(patronus::core::Point{0.0F, 0.0F});
-            else
-              park_followers(true);
           }
 
           tick_rec.aiming = decision.aiming;
           tick_rec.state = static_cast<int>(decision.phase);
-
-          if (decision.followers == MotorAction::Hold)
-            park_followers(true);
-          else if (decision.followers == MotorAction::ReturnHome)
-            park_followers(false);
 
           if (decision.leader == MotorAction::ReturnHome) {
             if (telemetry)
@@ -517,6 +485,12 @@ int main(int argc, char *argv[]) {
             if (telemetry)
               tick_rec.command_done_s = patronus::core::steady_now_s();
           }
+
+          // After the leader, so they get this tick's velocity.
+          if (decision.followers == MotorAction::Mirror)
+            mirror_followers();
+          else if (decision.followers == MotorAction::Hold)
+            hold_followers();
 
           tick_rec.cmd_pan_rad_s = tick_rec.command.pan.status == patronus::comm::IoStatus::Ok
                                      ? tick_rec.command.pan.attempted

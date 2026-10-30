@@ -48,7 +48,7 @@ is a fixed input for comparing implementations.
 Output commands are normalized [-1, 1], before motor scaling, clamps, soft limits,
 and bus I/O. Filter replay requires `filter_enabled=true`. Control-state replay
 below also supports unfiltered mode. Neither mode simulates physical movement,
-motor limits, follower bearing calculations, mailbox overwrites, inference, or
+motor limits, follower motion, mailbox overwrites, inference, or
 scheduling.
 
 ## Replay control-loop decisions
@@ -85,12 +85,12 @@ When control events are present, CSV output appends `phase`, `next_phase`,
   before end-of-tick transitions; `next_phase` includes those transitions and feedback.
 - Live telemetry also records phase 3 (manual). The operator's mode is not a replay
   input, so `telemetry_replay.py --control` refuses runs that contain it.
-- Actions: 0 no command, 1 aim, 2 hold, 3 return home. These are requests, not
+- Actions: 0 no command, 1 aim, 2 hold, 3 return home, 5 mirror the leader (followers only). These are requests, not
   proof a motor moved. `stop_after_home=1` requests the extra leader stop on arrival.
 - Raw detections refresh freshness even when the filter rejects them. Filtered
   aiming requires an estimate with age strictly less than 45 configured ticks.
 - At the home-delay boundary, the loop stops first and changes phase; return
-  motion starts on the next tick. Followers continue parking when the leader is home.
+  motion starts on the next tick. Followers keep mirroring when the leader is home.
 - Overlay-only mode emits no motor actions. In unfiltered mode only this tick's
   raw detection can request aiming; retained estimates are ignored.
 

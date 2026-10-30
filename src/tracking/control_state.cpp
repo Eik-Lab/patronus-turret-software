@@ -15,9 +15,10 @@ ControlDecision step_control(ControlState &state, const ControlParameters &param
     state.phase = ControlPhase::Manual;
     state.last_detection_ns = input.now_ns;
     ControlDecision decision{state.phase, false};
-    if (input.driving)
-      decision.leader = decision.followers =
-        input.pose_usable ? MotorAction::Manual : MotorAction::Hold;
+    if (input.driving) {
+      decision.leader = input.pose_usable ? MotorAction::Manual : MotorAction::Hold;
+      decision.followers = input.pose_usable ? MotorAction::Mirror : MotorAction::Hold;
+    }
     return decision;
   }
   // AtHome would be wrong: the operator has moved the gimbal away.
@@ -40,14 +41,13 @@ ControlDecision step_control(ControlState &state, const ControlParameters &param
     decision.leader = decision.followers = MotorAction::Hold;
     return decision;
   }
+  // Whatever the leader does, including holding and returning home.
+  decision.followers = MotorAction::Mirror;
   if (aiming) {
     decision.leader = MotorAction::Aim;
-    decision.followers = MotorAction::Aim;
     return decision;
   }
 
-  decision.followers =
-    state.phase == ControlPhase::Tracking ? MotorAction::Hold : MotorAction::ReturnHome;
   if (state.phase == ControlPhase::ReturningHome) {
     decision.leader = MotorAction::ReturnHome;
   } else {
