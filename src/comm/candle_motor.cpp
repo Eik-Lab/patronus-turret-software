@@ -1,5 +1,7 @@
 #include "comm/candle_motor.h"
 
+#include "core/state.h"
+
 #include "log.h"
 
 #include <algorithm>
@@ -193,18 +195,43 @@ void CandleMotor::wait_feeding(const mab::MD *active, int ms) {
   }
 }
 
-float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float velocity) {
+// Call with the bus lock held. Each axis has its own exchange midpoint.
+static AxisReading read_axis(mab::MD *md, BusMetrics *metrics, bool velocity = false) {
+  AxisReading result;
+  if (!md) {
+    result.status = IoStatus::Unavailable;
+    return result;
+  }
+  const double start = core::steady_now_s();
+  const auto sample = velocity ? md->getVelocity() : md->getPosition();
+  const double end = core::steady_now_s();
+  result.time_s = 0.5 * (start + end);
+  if (metrics) {
+    metrics->read_us += (end - start) * 1e6;
+    ++metrics->read_calls;
+  }
+  result.sdk_error = static_cast<int>(sample.second);
+  result.status = sample.second == mab::MD::Error_t::OK && std::isfinite(sample.first)
+                    ? IoStatus::Ok
+                    : IoStatus::Error;
+  if (result.status == IoStatus::Ok)
+    result.value = sample.first;
+  return result;
+}
+
+float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float velocity,
+                               AxisReading &position, BusMetrics *metrics) {
   if (md == nullptr || !limit.calibrated || velocity == 0.0F)
     return velocity;
 
   // Unknown position: not safe to move. No log, this is the hot path.
-  const auto pos = md->getPosition();
-  if (pos.second != mab::MD::Error_t::OK)
+  position = read_axis(md, metrics);
+  if (position.status != IoStatus::Ok)
     return 0.0F;
 
-  if (velocity > 0.0F && pos.first >= limit.max_pos)
+  if (velocity > 0.0F && position.value >= limit.max_pos)
     return 0.0F;
-  if (velocity < 0.0F && pos.first <= limit.min_pos)
+  if (velocity < 0.0F && position.value <= limit.min_pos)
     return 0.0F;
   return velocity;
 }
@@ -449,14 +476,50 @@ bool CandleMotor::boot_sequence() {
   return all_ok;
 }
 
-std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s,
-                                                  float tilt_rad_s) {
-  if (gimbal >= gimbals_.size())
-    return {0.0F, 0.0F};
+static std::unique_lock<std::mutex> lock_bus(std::mutex &mutex, BusMetrics *metrics) {
+  const double start = metrics ? core::steady_now_s() : 0.0;
+  std::unique_lock<std::mutex> lock(mutex);
+  if (metrics)
+    metrics->lock_wait_us += (core::steady_now_s() - start) * 1e6;
+  return lock;
+}
+
+static void write_axis(mab::MD *md, float velocity, AxisCommand &result, BusMetrics *metrics) {
+  if (!md) {
+    result.status = IoStatus::Unavailable;
+    return;
+  }
+  result.attempted = velocity;
+  const double start = metrics ? core::steady_now_s() : 0.0;
+  const auto error = md->setTargetVelocity(velocity);
+  if (metrics) {
+    metrics->write_us += (core::steady_now_s() - start) * 1e6;
+    ++metrics->write_calls;
+  }
+  result.sdk_error = static_cast<int>(error);
+  result.status = error == mab::MD::Error_t::OK ? IoStatus::Ok : IoStatus::Error;
+}
+
+MotorCommand CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s,
+                                       BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  return set_velocity_locked(gimbal, pan_rad_s, tilt_rad_s, metrics);
+}
+
+MotorCommand CandleMotor::set_velocity_locked(size_t gimbal, float pan_rad_s, float tilt_rad_s,
+                                              BusMetrics *metrics) {
+  MotorCommand result;
+  result.pan.requested = pan_rad_s;
+  result.tilt.requested = tilt_rad_s;
+  if (gimbal >= gimbals_.size() || gimbal >= pan_motors_.size() || gimbal >= tilt_motors_.size()) {
+    result.pan.status = result.tilt.status = IoStatus::Unavailable;
+    return result;
+  }
   auto *pan = pan_motors_[gimbal].get();
   auto *tilt = tilt_motors_[gimbal].get();
-  if (pan == nullptr || tilt == nullptr)
-    return {0.0F, 0.0F};
+  // A missing axis or nonfinite request must not leave the other axis moving.
+  if (!pan || !tilt || !std::isfinite(pan_rad_s) || !std::isfinite(tilt_rad_s))
+    pan_rad_s = tilt_rad_s = 0.0F;
 
   const auto &cfg = gimbals_[gimbal];
   pan_rad_s = std::clamp(pan_rad_s * cfg.pan_velocity_scale_, -cfg.pan_max_velocity_rad_s_,
@@ -464,35 +527,47 @@ std::pair<float, float> CandleMotor::set_velocity(size_t gimbal, float pan_rad_s
   tilt_rad_s = std::clamp(tilt_rad_s * cfg.tilt_velocity_scale_, -cfg.tilt_max_velocity_rad_s_,
                           cfg.tilt_max_velocity_rad_s_);
 
-  const std::scoped_lock lock(bus_mutex_);
-  pan_rad_s = apply_limit(pan, pan_limits_[gimbal], pan_rad_s);
-  tilt_rad_s = apply_limit(tilt, tilt_limits_[gimbal], tilt_rad_s);
+  pan_rad_s = apply_limit(pan, pan_limits_[gimbal], pan_rad_s, result.pan.limit_position, metrics);
+  // A failed pan check already requires a paired hold; another bus read cannot
+  // authorize motion. Leave the skipped tilt check explicitly NotAttempted.
+  if (result.pan.limit_position.status != IoStatus::Error)
+    tilt_rad_s =
+      apply_limit(tilt, tilt_limits_[gimbal], tilt_rad_s, result.tilt.limit_position, metrics);
+  if (result.pan.limit_position.status == IoStatus::Error ||
+      result.tilt.limit_position.status == IoStatus::Error)
+    pan_rad_s = tilt_rad_s = 0.0F;
 
-  pan->setTargetVelocity(pan_rad_s);
-  tilt->setTargetVelocity(tilt_rad_s);
-  return {pan_rad_s, tilt_rad_s};
+  write_axis(pan, pan_rad_s, result.pan, metrics);
+  write_axis(tilt, tilt_rad_s, result.tilt, metrics);
+  if (!result.ok() && (pan_rad_s != 0.0F || tilt_rad_s != 0.0F)) {
+    write_axis(pan, 0.0F, result.stop_pan, metrics);
+    write_axis(tilt, 0.0F, result.stop_tilt, metrics);
+  }
+  return result;
 }
 
-std::pair<float, float> CandleMotor::get_velocity(size_t gimbal) {
-  if (gimbal >= gimbals_.size())
-    return {0.0F, 0.0F};
-  if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
-    return {0.0F, 0.0F};
-  const std::scoped_lock lock(bus_mutex_);
-  const auto pv = pan_motors_[gimbal]->getVelocity();
-  const auto tv = tilt_motors_[gimbal]->getVelocity();
-  return {pv.first, tv.first};
+MotorReading CandleMotor::get_velocity(size_t gimbal, BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  return {
+    read_axis(gimbal < pan_motors_.size() ? pan_motors_[gimbal].get() : nullptr, metrics, true),
+    read_axis(gimbal < tilt_motors_.size() ? tilt_motors_[gimbal].get() : nullptr, metrics, true)};
 }
 
-std::pair<float, float> CandleMotor::get_position(size_t gimbal) {
-  if (gimbal >= gimbals_.size())
-    return {0.0F, 0.0F};
-  if (pan_motors_[gimbal] == nullptr || tilt_motors_[gimbal] == nullptr)
-    return {0.0F, 0.0F};
-  const std::scoped_lock lock(bus_mutex_);
-  const auto pp = pan_motors_[gimbal]->getPosition();
-  const auto tp = tilt_motors_[gimbal]->getPosition();
-  return {pp.first, tp.first};
+MotorReading CandleMotor::get_position(size_t gimbal, BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  return get_position_locked(gimbal, metrics);
+}
+
+MotorReading CandleMotor::get_position_locked(size_t gimbal, BusMetrics *metrics) {
+  MotorReading result;
+  result.pan =
+    read_axis(gimbal < pan_motors_.size() ? pan_motors_[gimbal].get() : nullptr, metrics);
+  // Control requires both axes. Avoid another blocking exchange once this
+  // sample is unusable; a later tick retries with new feedback.
+  if (result.pan.status == IoStatus::Ok)
+    result.tilt =
+      read_axis(gimbal < tilt_motors_.size() ? tilt_motors_[gimbal].get() : nullptr, metrics);
+  return result;
 }
 
 std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
@@ -501,32 +576,82 @@ std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
   return {pan_limits_[gimbal].home_pos, tilt_limits_[gimbal].home_pos};
 }
 
-bool CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
-                                 float max_velocity_rad_s) {
+MotionResult CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
+                                         float max_velocity_rad_s, double max_pose_age_s,
+                                         BusMetrics *metrics) {
   const auto [home_pan, home_tilt] = home_position(gimbal);
-  return drive_to(gimbal, home_pan, home_tilt, position_gain, tolerance_rad, max_velocity_rad_s);
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  return drive_to_locked(gimbal, home_pan, home_tilt, position_gain, tolerance_rad,
+                         max_velocity_rad_s, max_pose_age_s, true, metrics);
 }
 
-bool CandleMotor::drive_to(size_t gimbal, float pan_rad, float tilt_rad, float position_gain,
-                           float tolerance_rad, float max_velocity_rad_s) {
-  if (gimbal >= gimbals_.size())
-    return true;
-  auto *pan = pan_motors_[gimbal].get();
-  auto *tilt = tilt_motors_[gimbal].get();
-  if (pan == nullptr || tilt == nullptr)
-    return true;
+MotionResult CandleMotor::drive_to(size_t gimbal, float pan_rad, float tilt_rad,
+                                   float position_gain, float tolerance_rad,
+                                   float max_velocity_rad_s, double max_pose_age_s,
+                                   BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  return drive_to_locked(gimbal, pan_rad, tilt_rad, position_gain, tolerance_rad,
+                         max_velocity_rad_s, max_pose_age_s, false, metrics);
+}
+
+MotionResult CandleMotor::drive_to_locked(size_t gimbal, float pan_rad, float tilt_rad,
+                                          float position_gain, float tolerance_rad,
+                                          float max_velocity_rad_s, double max_pose_age_s,
+                                          bool stop_at_target, BusMetrics *metrics) {
+  MotionResult result;
+  result.position = get_position_locked(gimbal, metrics);
+  if (!result.position.fresh(core::steady_now_s(), max_pose_age_s)) {
+    result.command = set_velocity_locked(gimbal, 0.0F, 0.0F, metrics);
+    return result;
+  }
 
   const float limit = (max_velocity_rad_s > 0.0F)
                         ? std::min(max_velocity_rad_s, gimbals_[gimbal].max_velocity_rad_s_)
                         : gimbals_[gimbal].max_velocity_rad_s_;
 
-  const auto [pp, pt] = get_position(gimbal);
-  const float pan_err = pp - pan_rad;
-  const float tilt_err = pt - tilt_rad;
+  const float pan_err = result.position.pan.value - pan_rad;
+  const float tilt_err = result.position.tilt.value - tilt_rad;
+  result.within_tolerance = std::abs(pan_err) < tolerance_rad && std::abs(tilt_err) < tolerance_rad;
+  if (stop_at_target && result.within_tolerance) {
+    // Home arrival is a hold, not a corrective move followed by another stop.
+    // Zero velocity needs no soft-limit reads; both writes must still succeed.
+    result.command = set_velocity_locked(gimbal, 0.0F, 0.0F, metrics);
+    return result;
+  }
   const float pan_vel = std::clamp(-pan_err * position_gain, -limit, limit);
   const float tilt_vel = std::clamp(-tilt_err * position_gain, -limit, limit);
-  set_velocity(gimbal, pan_vel, tilt_vel);
-  return std::abs(pan_err) < tolerance_rad && std::abs(tilt_err) < tolerance_rad;
+  // Deliberately do not pass result.position: soft-limit feedback stays fresh
+  // until command-age and physical movement bounds justify reuse.
+  result.command = set_velocity_locked(gimbal, pan_vel, tilt_vel, metrics);
+  return result;
+}
+
+MotionResult CandleMotor::mirror_pose(size_t gimbal, float pan_rad, float tilt_rad,
+                                      float pan_velocity_rad_s, float tilt_velocity_rad_s,
+                                      float position_gain, double max_pose_age_s,
+                                      BusMetrics *metrics) {
+  const auto lock = lock_bus(bus_mutex_, metrics);
+  MotionResult result;
+  result.position = get_position_locked(gimbal, metrics);
+  if (!result.position.fresh(core::steady_now_s(), max_pose_age_s)) {
+    result.command = set_velocity_locked(gimbal, 0.0F, 0.0F, metrics);
+    return result;
+  }
+
+  const auto &cfg = gimbals_[gimbal];
+  const float limit = cfg.max_velocity_rad_s_;
+  // set_velocity_locked scales again, so undo it for a velocity that is already scaled.
+  const auto unscaled = [](float velocity, float scale) {
+    return scale > 0.0F ? velocity / scale : 0.0F;
+  };
+  const float pan_vel =
+    unscaled(pan_velocity_rad_s, cfg.pan_velocity_scale_) +
+    std::clamp((pan_rad - result.position.pan.value) * position_gain, -limit, limit);
+  const float tilt_vel =
+    unscaled(tilt_velocity_rad_s, cfg.tilt_velocity_scale_) +
+    std::clamp((tilt_rad - result.position.tilt.value) * position_gain, -limit, limit);
+  result.command = set_velocity_locked(gimbal, pan_vel, tilt_vel, metrics);
+  return result;
 }
 
 mab::MD *CandleMotor::pan_motor(size_t gimbal) {

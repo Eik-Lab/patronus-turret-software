@@ -4,10 +4,11 @@
 #include "core/state.h"
 #include "core/types.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <kalman/tracker.hpp>
 #include <optional>
 
 namespace patronus::tracking {
@@ -50,7 +51,7 @@ public:
     float au_px_s2{0.0F};
     float av_px_s2{0.0F};
     double capture_s{0.0};
-    float frame_pan_rad{0.0F}; ///< Scaled by cos(elevation): see set_level_tilt().
+    float frame_pan_rad{0.0F}; ///< Scaled by cos(elevation) in the pose history.
     float frame_tilt_rad{0.0F};
     float nis{0.0F}; ///< Normalised innovation squared, last update.
   };
@@ -150,51 +151,87 @@ private:
   Values v_;
 };
 
-/// Constant-acceleration Kalman filter (kalman-cpp) on the detection centre,
-/// stepped once per camera frame.
-///
-/// It works in a camera-stabilised frame: each measurement is shifted by
-/// -focal * encoder change at the frame's capture, or the gimbal's own slew
-/// would read as target velocity. The capture time matters: a pose 50 ms off
-/// at 1 rad/s puts 0.05 * focal px of error into the target.
-///
-/// Not thread-safe.
-class TargetFilter {
-public:
-  /// Allocates. A 0 focal length disables camera-motion compensation.
-  TargetFilter(const config::TrackingConfig &cfg, uint32_t det_width, uint32_t det_height,
-               float focal_x_px, float focal_y_px);
-
-  ~TargetFilter();
-
-  TargetFilter(const TargetFilter &) = delete;
-  TargetFilter &operator=(const TargetFilter &) = delete;
-  TargetFilter(TargetFilter &&) noexcept;
-  TargetFilter &operator=(TargetFilter &&) noexcept;
-
-  [[nodiscard]] bool ego_compensation_active() const noexcept;
-  [[nodiscard]] bool initialized() const noexcept;
-  [[nodiscard]] int coast_frames() const noexcept;
-
-  /// Tilt at which the camera looks level; pan is scaled by cos(elevation).
-  void set_level_tilt(float tilt_rad) noexcept;
-
-  /// Call every tick.
-  void push_gimbal_sample(double t_s, float pan_rad, float tilt_rad);
-
-  /// Once per camera frame. Empty while there is no track. Hot path.
-  [[nodiscard]] std::optional<Estimate> step(const core::FrameObservation &observation,
-                                             double now_s);
-
-  /// Call every tick, not per frame: re-placing the error at the newest
-  /// encoder pose is what stops the gimbal overshooting.
-  [[nodiscard]] std::optional<AimPoint> aim_at(double now_s) const;
-
-  void reset() noexcept;
-
-private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+/// Resolved once at startup; keep constant for the lifetime of a FilterState.
+/// The Kalman model is copied into the tracker; the remaining parameters are
+/// read directly by the frame and tick transformations.
+struct FilterParameters {
+  kalman::Config model;
+  float meas_sigma_px{8.0F};
+  float conf_noise_scale{10.0F};
+  double latency_s{0.0};
+  double max_lead_s{0.25};
+  double actuation_s{0.0};
+  double max_coast_s{1.0};
+  float det_w_px{1.0F};
+  float det_h_px{1.0F};
+  // Negative: panning right moves the image left.
+  float pan_px_per_rad{0.0F};
+  float tilt_px_per_rad{0.0F};
+  float level_tilt_rad{0.0F};
+  bool ego_active{false};
 };
+
+/// Encoder samples are consumed together during interpolation, so keep AoS.
+struct PoseHistory {
+  static constexpr int capacity = 256; ///< 2.56 s at a 10 ms tick.
+  struct Sample {
+    double t_s;
+    float pan_rad; ///< Effective pan, scaled by cos(elevation).
+    float tilt_rad;
+  };
+  std::array<Sample, capacity> samples{};
+  float last_raw_pan_rad{0.0F};
+  float effective_pan_rad{0.0F};
+  int head{0}; ///< Next write.
+  int count{0};
+};
+
+/// Single-owner mutable data. Inline storage: no allocation or opaque pointer.
+/// The small frame state precedes the larger, tick-written pose history.
+struct FilterState {
+  explicit FilterState(const FilterParameters &parameters) : tracker(parameters.model) {
+  }
+
+  kalman::Tracker tracker;
+  bool initialized{false};
+  double last_time_s{0.0};
+  double last_capture_s{0.0};
+  int coast{0};
+  double coast_s{0.0};
+  bool have_frame_pose{false};
+  float frame_pan_rad{0.0F};
+  float frame_tilt_rad{0.0F};
+  float camera_vu{0.0F};
+  float camera_vv{0.0F};
+  bool camera_compensated{false};
+  float box_w_px{0.0F};
+  float box_h_px{0.0F};
+  core::Point detection_error_px{0.0F, 0.0F};
+  uint64_t detection_frame_id{0};
+  double frame_capture_s{0.0};
+  AimPoint lead{}; ///< Reused for frames no newer than the last.
+  PoseHistory poses;
+};
+
+[[nodiscard]] FilterParameters make_filter_parameters(const config::TrackingConfig &cfg,
+                                                      uint32_t det_width, uint32_t det_height,
+                                                      float focal_x_px, float focal_y_px,
+                                                      float level_tilt_rad);
+
+/// Every tick. A pose 50 ms off at 1 rad/s introduces 0.05 * focal px of error.
+void push_gimbal_sample(PoseHistory &poses, double t_s, float pan_rad, float tilt_rad,
+                        float level_tilt_rad);
+
+/// Once per camera frame; only state is mutated. Empty while there is no track.
+[[nodiscard]] std::optional<Estimate> step_filter(FilterState &f,
+                                                  const FilterParameters &p,
+                                                  const core::FrameObservation &obs,
+                                                  double now_s);
+
+/// Every tick, not per frame: place the error at the newest encoder pose.
+[[nodiscard]] std::optional<AimPoint> aim_at(const FilterState &f,
+                                             const FilterParameters &p, double now_s);
+
+void reset_filter(FilterState &f) noexcept;
 
 } // namespace patronus::tracking

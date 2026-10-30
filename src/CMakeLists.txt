@@ -45,7 +45,10 @@ set(INFERENCE_SOURCES
     main.cpp
     core/config.cpp
     pipeline/inference.cpp
+    pipeline/run_trace.cpp
+    pipeline/video_encoder.cpp
     tracking/aim_control.cpp
+    tracking/control_state.cpp
     tracking/target_filter.cpp
     tracking/prediction_overlay.cpp
     tracking/telemetry.cpp
@@ -59,11 +62,16 @@ set(INFERENCE_HEADERS
     core/types.h
     pipeline/inference_mono.h
     pipeline/inference_rgb.h
+    pipeline/run_trace.h
+    pipeline/video_encoder.h
     tracking/aim_control.h
+    tracking/control_state.h
+    tracking/manual_control.h
     tracking/prediction_overlay.h
     tracking/telemetry.h
     tracking/target_filter.h
     comm/candle_motor.h
+    comm/motor_result.h
     comm/command_listener.h
     comm/sensor_module.h)
 
@@ -100,6 +108,14 @@ target_link_libraries(
           candle
           kalman::kalman)
 
+# Separate explicitly armed single-axis tool. No camera/PDS/tracker code linked.
+add_executable(actuator_calibration tools/actuator_calibration.cpp)
+target_include_directories(
+  actuator_calibration
+  PRIVATE /usr/include/glib-2.0
+          /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)
+target_link_libraries(actuator_calibration PRIVATE candle glib-2.0 pthread)
+
 # Focal-length calibration tool (needs the pylon SDK; see
 # src/tools/focal_calib.cpp). Built only when pylon is installed.
 find_path(
@@ -111,7 +127,8 @@ find_path(
   PATHS /opt/pylon/lib
   NO_DEFAULT_PATH)
 if(PYLON_INCLUDE_DIR AND PYLON_LIB_DIR)
-  add_executable(focal_calib tools/focal_calib.cpp core/config.cpp comm/candle_motor.cpp)
+  add_executable(focal_calib tools/focal_calib.cpp core/config.cpp
+                             comm/candle_motor.cpp)
   target_include_directories(
     focal_calib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} /usr/include/glib-2.0
                         /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)

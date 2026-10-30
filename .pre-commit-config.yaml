@@ -13,6 +13,8 @@ repos:
         entry: clang-tidy --fix -p build
         language: system
         types_or: [c, c++, objective-c]
+        # Tests are only in the replay build's compile database.
+        exclude: ^tools/
       - id: deadnix
         name: deadnix
         entry: deadnix --fail

@@ -14,6 +14,7 @@ struct PipelineConfig {
   std::string udp_host_;
   uint16_t udp_port_{5000};
   uint32_t encoder_bitrate_{3000};
+  std::string encoder_backend_{"x264"}; ///< x264 or thor; bitrate remains in kbps.
   uint32_t muxer_width_{1920};
   uint32_t muxer_height_{1088};
   bool enabled_{true};
@@ -23,45 +24,45 @@ struct PipelineConfig {
   uint32_t detection_height_{1088};
 
   /// Detection px per radian; 0 disables camera-motion compensation.
-  float focal_x_px_{0.0f};
-  float focal_y_px_{0.0f};
+  float focal_x_px_{0.0F};
+  float focal_y_px_{0.0F};
 
   bool draw_predictions_{true};
-  float prediction_lead_s_{0.15f};
+  float prediction_lead_s_{0.15F};
 
   /// Readout + USB transfer after exposure; <= 0 estimates it from the caps.
-  float readout_ms_{0.0f};
+  float readout_ms_{0.0F};
 
   uint32_t binning_{1};      ///< camera_caps must give the binned size.
   uint32_t grab_buffers_{0}; ///< 0 = Pylon default (16).
 };
 
 struct MotorPidConfig {
-  float kp_{2.0f};
-  float ki_{0.1f};
-  float kd_{0.0f};
-  float integral_max_{0.5f};
+  float kp_{2.0F};
+  float ki_{0.1F};
+  float kd_{0.0F};
+  float integral_max_{0.5F};
 };
 
 struct GimbalConfig {
   uint16_t pan_node_id_{16};
   uint16_t tilt_node_id_{18};
-  float max_velocity_rad_s_{6.28f};
-  float tilt_max_rad_{0.611f}; ///< Only logged; boot calibration sets the real limits.
+  float max_velocity_rad_s_{6.28F};
+  float tilt_max_rad_{0.611F}; ///< Only logged; boot calibration sets the real limits.
   bool calibrate_on_boot_{false};
   MotorPidConfig pan_pid_;
   MotorPidConfig tilt_pid_;
   /// Command = clamp(command * scale, +/- axis max).
-  float pan_velocity_scale_{1.0f};
-  float tilt_velocity_scale_{1.0f};
-  float pan_max_velocity_rad_s_{6.28f};
-  float tilt_max_velocity_rad_s_{6.28f};
+  float pan_velocity_scale_{1.0F};
+  float tilt_velocity_scale_{1.0F};
+  float pan_max_velocity_rad_s_{6.28F};
+  float tilt_max_velocity_rad_s_{6.28F};
 
-  /// 1-based leader index, or 0. A follower aims at its leader's bearing.
+  /// 1-based leader index, or 0. A follower mirrors its leader's pose.
   uint16_t follow_{0};
-  float follow_gain_{5.0f};
-  float pan_offset_rad_{0.0f};
-  float tilt_offset_rad_{0.0f};
+  float follow_gain_{5.0F};
+  float pan_offset_rad_{0.0F};
+  float tilt_offset_rad_{0.0F};
 
   /// "rgb", "mono", or empty to round-robin.
   std::string camera_;
@@ -69,17 +70,20 @@ struct GimbalConfig {
 
 struct TrackingConfig {
   bool home_return_enabled_{true};
-  float home_return_gain_{2.0f};
-  float home_tolerance_rad_{0.05f};
+  float home_return_gain_{2.0F};
+  float home_tolerance_rad_{0.05F};
   int home_return_delay_ms_{500};
-  float home_return_max_velocity_{1.5f};
+  float home_return_max_velocity_{1.5F};
+
+  float manual_speed_{0.25F}; ///< Fraction of the control law's full scale, (0, 1].
+  int manual_timeout_ms_{150};
 
   bool filter_enabled_{true};
-  float filter_meas_sigma_px_{8.0f};
-  float filter_gate_{9.21f};
+  float filter_meas_sigma_px_{8.0F};
+  float filter_gate_{9.21F};
   int filter_tick_ms_{10};
-  float filter_q_jerk_{2.0e5f};
-  float filter_conf_noise_scale_{10.0f};
+  float filter_q_jerk_{2.0e5F};
+  float filter_conf_noise_scale_{10.0F};
   int filter_max_coast_ms_{1000}; ///< 0 disables.
 
   /// Fallback for frames without a PTS.
@@ -88,9 +92,9 @@ struct TrackingConfig {
   int filter_actuation_latency_ms_{0};
 
   // See SensorControlGains.
-  float kp_{0.006f};
-  float kd_{0.0f};
-  float lead_gain_{0.0f};
+  float kp_{0.006F};
+  float kd_{0.0F};
+  float lead_gain_{0.0F};
 };
 
 /// Gains are in pixels, so they differ per camera.
