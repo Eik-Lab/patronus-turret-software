@@ -45,6 +45,7 @@ set(INFERENCE_SOURCES
     main.cpp
     core/config.cpp
     pipeline/inference.cpp
+    pipeline/run_trace.cpp
     pipeline/video_encoder.cpp
     tracking/aim_control.cpp
     tracking/control_state.cpp
@@ -61,6 +62,7 @@ set(INFERENCE_HEADERS
     core/types.h
     pipeline/inference_mono.h
     pipeline/inference_rgb.h
+    pipeline/run_trace.h
     pipeline/video_encoder.h
     tracking/aim_control.h
     tracking/control_state.h

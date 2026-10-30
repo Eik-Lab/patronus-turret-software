@@ -103,7 +103,8 @@ if(PATRONUS_REPLAY_ONLY)
   target_include_directories(observation_channel_test PRIVATE src)
   target_link_libraries(observation_channel_test PRIVATE Threads::Threads)
   add_test(NAME observation_channel COMMAND observation_channel_test)
-  add_executable(motor_result_test tools/test_motor_result.cpp src/tracking/control_state.cpp)
+  add_executable(motor_result_test tools/test_motor_result.cpp
+                                   src/tracking/control_state.cpp)
   target_include_directories(motor_result_test PRIVATE src)
   add_test(NAME motor_result COMMAND motor_result_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -113,6 +114,24 @@ if(PATRONUS_REPLAY_ONLY)
       ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tracking_replay.py
       $<TARGET_FILE:tracking_replay> $<TARGET_FILE:telemetry_fixture>)
+  pkg_check_modules(GSTREAMER QUIET IMPORTED_TARGET gstreamer-1.0)
+  if(GSTREAMER_FOUND)
+    add_executable(run_trace_fixture tools/test_run_trace.cpp
+                                     src/pipeline/run_trace.cpp)
+    target_include_directories(run_trace_fixture PRIVATE src)
+    target_link_libraries(run_trace_fixture PRIVATE PkgConfig::GSTREAMER
+                                                    Threads::Threads)
+    add_test(
+      NAME live_recording
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_live_run.py --trace-driver
+        $<TARGET_FILE:run_trace_fixture>)
+  else()
+    add_test(NAME live_recording
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_live_run.py)
+  endif()
   return()
 endif()
 

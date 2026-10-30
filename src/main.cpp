@@ -49,12 +49,15 @@ int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
   gboolean rgb_only = FALSE;
   gboolean mono_only = FALSE;
+  gboolean record_only = FALSE;
 
   GOptionEntry entries[] = {
     {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config_path,
      "Path to system config file (default: config/system.ini)", "FILE"},
     {"rgb-only", 'r', 0, G_OPTION_ARG_NONE, &rgb_only, "Run RGB pipeline only", nullptr},
     {"mono-only", 'm', 0, G_OPTION_ARG_NONE, &mono_only, "Run mono pipeline only", nullptr},
+    {"record-only", 0, 0, G_OPTION_ARG_NONE, &record_only,
+     "Disable motors (including boot calibration), sensors and external commands", nullptr},
     {nullptr, 0, 0, G_OPTION_ARG_NONE, nullptr, nullptr, nullptr},
   };
 
@@ -74,6 +77,12 @@ int main(int argc, char *argv[]) {
   std::string cfg_path = config_path ? config_path : "config/system.ini";
   SystemConfig cfg = load_config(cfg_path);
   g_free(config_path);
+
+  if (record_only) {
+    cfg.tracking_ = false;
+    cfg.sensor_.enabled_ = false;
+    cfg.command_.enabled_ = false;
+  }
 
   if (const auto level = parse_level(cfg.log_level_); level.has_value()) {
     set_log_level(*level);

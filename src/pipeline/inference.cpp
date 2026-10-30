@@ -14,6 +14,7 @@
 #include "core/state.h"
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
+#include "pipeline/run_trace.h"
 #include "pipeline/video_encoder.h"
 #include "tracking/prediction_overlay.h"
 
@@ -681,6 +682,9 @@ namespace {
                         nullptr);
       gst_object_unref(osd_sink_pad);
     }
+
+    if (!install_run_trace(pipeline, camera == Camera::Rgb ? "rgb" : "mono"))
+      return fail(pipeline);
 
     LOG(Info, "Using pylonsrc (Basler camera serial " << config.camera_serial_ << ')');
     ctx->readout_s = readout_time_s(config);
