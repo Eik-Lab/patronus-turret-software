@@ -31,14 +31,16 @@ scene; encoded footage includes overlays and is not raw sensor ground truth.
 
 ## Prepare, then record
 
-From the checkout, using the freshly built executable:
+From the checkout, using the freshly built executable. Omitting `--mode` uses
+`[general] mode` from the supplied configuration (currently mono-only); an
+explicit `--mode both` deliberately re-enables both cameras in the isolated run.
 
 ```sh
 # Preparation only: no application, receiver or camera starts.
-python3 tools/live_run.py --binary build/inference --mode both
+python3 tools/live_run.py --binary build/inference
 
 # User-initiated live recording, five minutes, a fresh directory each time.
-python3 tools/live_run.py --binary build/inference --mode both --seconds 300 --execute
+python3 tools/live_run.py --binary build/inference --seconds 300 --execute
 ```
 
 The tool prints the run directory. Preparation is a dry run; `--execute` creates

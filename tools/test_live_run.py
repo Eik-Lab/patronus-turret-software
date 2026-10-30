@@ -48,6 +48,19 @@ class RecordingTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 prepare(config, Path(sys.executable), output, "both", 15000)
 
+            # Omitting --mode must not silently restart RGB for a mono-only test.
+            config.write_text(original.decode().replace("[general]", "[general]\nmode=mono")
+                              .replace(f"[rgb]\ninfer_config={infer}",
+                                       "[rgb]\nenabled=false\ninfer_config=missing-rgb.ini"))
+            mono_output = root / "mono-run"
+            manifest = prepare(config, Path(sys.executable), mono_output, None, 15000)
+            effective = read_config(mono_output / "system.ini")
+            self.assertEqual(manifest["cameras"], ["mono"])
+            self.assertEqual(effective["general"]["mode"], "mono")
+            self.assertFalse(effective.getboolean("rgb", "enabled"))
+            self.assertTrue(effective.getboolean("mono", "enabled"))
+            self.assertFalse((mono_output / "rgb-infer.ini").exists())
+
     def test_trace_rejects_duplicate_missing_and_unmatched_pts(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trace.csv"

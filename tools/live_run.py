@@ -51,8 +51,11 @@ def command_output(command, cwd=ROOT):
 
 def prepare(config_path, binary, output, mode, port, trace=True):
     """Snapshot inputs and create safe config; never launch application or inspect cameras."""
-    output.mkdir(parents=True, exist_ok=False)
     config = read_config(config_path)
+    mode = mode or config.get("general", "mode", fallback="both")
+    if mode not in ("both", "rgb", "mono"):
+        raise ValueError(f"Invalid camera mode: {mode}")
+    output.mkdir(parents=True, exist_ok=False)
     (output / "source-system.ini").write_bytes(config_path.read_bytes())
     manifest = {"schema": 1, "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "monotonic_ns": time.monotonic_ns(), "platform": platform.platform(),
@@ -278,7 +281,8 @@ def main():
     parser.add_argument("--binary", type=Path, default=ROOT / "build/inference")
     parser.add_argument("--config", type=Path, default=ROOT / "config/system.ini")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--mode", choices=("both", "rgb", "mono"), default="both")
+    parser.add_argument("--mode", choices=("both", "rgb", "mono"),
+                        help="Override camera mode (default: [general] mode in config)")
     parser.add_argument("--seconds", type=float, default=300)
     parser.add_argument("--port", type=int, default=15000, help="First of two loopback RTP ports")
     parser.add_argument("--shutdown-grace", type=float, default=15)
