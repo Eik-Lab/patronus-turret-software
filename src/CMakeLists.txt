@@ -107,6 +107,14 @@ target_link_libraries(
           candle
           kalman::kalman)
 
+# Separate explicitly armed single-axis tool. No camera/PDS/tracker code linked.
+add_executable(actuator_calibration tools/actuator_calibration.cpp)
+target_include_directories(
+  actuator_calibration
+  PRIVATE /usr/include/glib-2.0
+          /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)
+target_link_libraries(actuator_calibration PRIVATE candle glib-2.0 pthread)
+
 # Focal-length calibration tool (needs the pylon SDK; see
 # src/tools/focal_calib.cpp). Built only when pylon is installed.
 find_path(

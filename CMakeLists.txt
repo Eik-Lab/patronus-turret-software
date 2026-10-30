@@ -108,6 +108,17 @@ if(PATRONUS_REPLAY_ONLY)
   target_include_directories(motor_result_test PRIVATE src)
   add_test(NAME motor_result COMMAND motor_result_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(actuator_calibration src/tools/actuator_calibration.cpp)
+  target_compile_definitions(actuator_calibration
+                             PRIVATE PATRONUS_CALIBRATION_SIMULATION=1)
+  target_link_libraries(actuator_calibration PRIVATE PkgConfig::GLIB
+                                                     Threads::Threads)
+  add_test(
+    NAME actuator_calibration
+    COMMAND
+      ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_actuator_calibration.py
+      $<TARGET_FILE:actuator_calibration>)
   add_test(
     NAME tracking_replay
     COMMAND
