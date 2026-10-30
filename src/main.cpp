@@ -7,6 +7,7 @@
 #include "pipeline/inference_rgb.h"
 #include "tracking/aim_control.h"
 #include "tracking/control_state.h"
+#include "tracking/manual_control.h"
 #include "tracking/prediction_overlay.h"
 #include "tracking/target_filter.h"
 #include "tracking/telemetry.h"
@@ -21,8 +22,8 @@
 #include <cmath>
 #include <csignal>
 #include <memory>
-#include <sstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,6 +45,8 @@ static patronus::core::LatestValue<patronus::core::FrameObservation> detection_m
 // One channel per camera, so two gimbals on different cameras never share a slot.
 static patronus::tracking::PredictionChannel predictions_rgb;
 static patronus::tracking::PredictionChannel predictions_mono;
+
+static patronus::tracking::ManualControl manual_control;
 
 int main(int argc, char *argv[]) {
   gchar *config_path = nullptr;
@@ -121,7 +124,7 @@ int main(int argc, char *argv[]) {
   if (cfg.command_.enabled_) {
     command_thread = std::thread([&]() {
       patronus::comm::run_command_thread(cfg.command_.command_host_, cfg.command_.command_port_,
-                                         running);
+                                         running, manual_control);
     });
   }
 
@@ -407,8 +410,11 @@ int main(int argc, char *argv[]) {
 
           const patronus::tracking::ControlInput control_input{
             std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count(),
-            opt.has_value() && opt->detection_.has_value(), est.has_value(), driving,
-            tick_rec.pose_usable};
+            opt.has_value() && opt->detection_.has_value(),
+            est.has_value(),
+            driving,
+            tick_rec.pose_usable,
+            manual_control.manual()};
           const double control_start_s = telemetry ? patronus::core::steady_now_s() : 0.0;
           const auto decision =
             patronus::tracking::step_control(control, control_params, control_input);
@@ -428,8 +434,9 @@ int main(int argc, char *argv[]) {
                 tick_rec.command_start_s = patronus::core::steady_now_s();
                 tick_rec.aim_compute_us = (tick_rec.command_start_s - tick_rec.aim_s) * 1e6;
               }
-              tick_rec.command = motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
-                                                     cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_, bus_metrics);
+              tick_rec.command =
+                motor->set_velocity(g, cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                    cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_, bus_metrics);
               if (telemetry)
                 tick_rec.command_done_s = patronus::core::steady_now_s();
               tick_rec.aim = aim;
@@ -453,12 +460,28 @@ int main(int argc, char *argv[]) {
               tick_rec.command_start_s = patronus::core::steady_now_s();
               tick_rec.aim_compute_us = (tick_rec.command_start_s - aim_start) * 1e6;
             }
-            tick_rec.command = motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
-                                                   raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_, bus_metrics);
+            tick_rec.command =
+              motor->set_velocity(g, raw_cmd.pan_ * gimbal_cfg.max_velocity_rad_s_,
+                                  raw_cmd.tilt_ * gimbal_cfg.max_velocity_rad_s_, bus_metrics);
             if (telemetry)
               tick_rec.command_done_s = patronus::core::steady_now_s();
             if (tick_rec.command.ok())
               aim_followers(error);
+            else
+              park_followers(true);
+          } else if (decision.leader == MotorAction::Manual) {
+            const auto cmd = manual_control.command(patronus::core::steady_now_s(),
+                                                    trk.manual_timeout_ms_ * 0.001);
+            const float speed = trk.manual_speed_ * gimbal_cfg.max_velocity_rad_s_;
+            if (telemetry)
+              tick_rec.command_start_s = patronus::core::steady_now_s();
+            tick_rec.command =
+              motor->set_velocity(g, cmd.pan_ * speed, cmd.tilt_ * speed, bus_metrics);
+            if (telemetry)
+              tick_rec.command_done_s = patronus::core::steady_now_s();
+            // Followers point where the operator points.
+            if (tick_rec.command.ok())
+              aim_followers(patronus::core::Point{0.0F, 0.0F});
             else
               park_followers(true);
           }

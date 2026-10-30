@@ -151,6 +151,17 @@ frame 1.33 1.33 1.33 1.33 7 1 690 395 20 10 1
                 self.assertEqual([r["next_phase"] for r in decisions], ["0", "0"])
                 with self.assertRaisesRegex(ValueError, "pose-fault resets"):
                     convert(run, self.root / "invalid-filter-reconstruction", 0)
+                # The operator's mode is not a replay input.
+                tick_log = run / "ticks.csv"
+                recorded = tick_log.read_text()
+                rows = recorded.splitlines()
+                state = rows[0].split(",").index("state")
+                cells = rows[1].split(",")
+                cells[state] = "3"
+                tick_log.write_text("\n".join([rows[0], ",".join(cells), *rows[2:]]) + "\n")
+                with self.assertRaisesRegex(ValueError, "manual mode"):
+                    convert(run, self.root / "manual-control", 0, control_only=True)
+                tick_log.write_text(recorded)
                 # Missing ticks can change the state; never silently reconstruct them.
                 log = run / "run.txt"
                 log.write_text(log.read_text().replace("dropped_ticks 0", "dropped_ticks 1"))

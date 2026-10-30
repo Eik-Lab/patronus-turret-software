@@ -66,6 +66,7 @@ set(INFERENCE_HEADERS
     pipeline/video_encoder.h
     tracking/aim_control.h
     tracking/control_state.h
+    tracking/manual_control.h
     tracking/prediction_overlay.h
     tracking/telemetry.h
     tracking/target_filter.h

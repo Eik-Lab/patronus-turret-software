@@ -107,6 +107,10 @@ if(PATRONUS_REPLAY_ONLY)
                                    src/tracking/control_state.cpp)
   target_include_directories(motor_result_test PRIVATE src)
   add_test(NAME motor_result COMMAND motor_result_test)
+  add_executable(manual_control_test tools/test_manual_control.cpp
+                                     src/tracking/control_state.cpp)
+  target_include_directories(manual_control_test PRIVATE src)
+  add_test(NAME manual_control COMMAND manual_control_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(actuator_calibration src/tools/actuator_calibration.cpp)
   target_compile_definitions(actuator_calibration

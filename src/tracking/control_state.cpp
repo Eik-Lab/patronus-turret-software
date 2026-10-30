@@ -10,6 +10,20 @@ ControlParameters make_control_parameters(const config::TrackingConfig &cfg) {
 
 ControlDecision step_control(ControlState &state, const ControlParameters &params,
                              const ControlInput &input) {
+  if (input.manual) {
+    // Keeps the target age at zero, so the home delay runs from leaving manual.
+    state.phase = ControlPhase::Manual;
+    state.last_detection_ns = input.now_ns;
+    ControlDecision decision{state.phase, false};
+    if (input.driving)
+      decision.leader = decision.followers =
+        input.pose_usable ? MotorAction::Manual : MotorAction::Hold;
+    return decision;
+  }
+  // AtHome would be wrong: the operator has moved the gimbal away.
+  if (state.phase == ControlPhase::Manual)
+    state.phase = ControlPhase::Tracking;
+
   if (input.raw_detection) {
     state.phase = ControlPhase::Tracking;
     state.last_detection_ns = input.now_ns;

@@ -40,6 +40,8 @@ def convert(run, output, gimbal, control_only=False):
             if int(row["gimbal"]) != gimbal:
                 continue
             if control_only:
+                if row["state"] == "3":
+                    raise ValueError("Control replay cannot reconstruct manual mode")
                 elapsed = int(row["control_elapsed_ns"])
                 append(elapsed, 0, f"control {elapsed} {row['raw_detection']} "
                                   f"{row['estimate_available']} {row['driving']} {row['reached_home']} "

@@ -83,6 +83,8 @@ When control events are present, CSV output appends `phase`, `next_phase`,
 
 - Phases: 0 tracking, 1 returning home, 2 at home. `phase` matches live telemetry
   before end-of-tick transitions; `next_phase` includes those transitions and feedback.
+- Live telemetry also records phase 3 (manual). The operator's mode is not a replay
+  input, so `telemetry_replay.py --control` refuses runs that contain it.
 - Actions: 0 no command, 1 aim, 2 hold, 3 return home. These are requests, not
   proof a motor moved. `stop_after_home=1` requests the extra leader stop on arrival.
 - Raw detections refresh freshness even when the filter rejects them. Filtered

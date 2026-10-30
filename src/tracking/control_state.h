@@ -7,8 +7,8 @@
 namespace patronus::tracking {
 
 // Values are part of the telemetry/replay format.
-enum class ControlPhase { Tracking, ReturningHome, AtHome };
-enum class MotorAction { None, Aim, Hold, ReturnHome };
+enum class ControlPhase { Tracking, ReturningHome, AtHome, Manual };
+enum class MotorAction { None, Aim, Hold, ReturnHome, Manual };
 
 struct ControlParameters {
   int64_t stale_after_ns;
@@ -28,6 +28,7 @@ struct ControlInput {
   bool estimate_available; ///< Retained estimate, including ticks with no frame.
   bool driving;
   bool pose_usable{true}; ///< Both axes valid and fresh; legacy replay assumes true.
+  bool manual{false};     ///< The operator is steering; detections do not move the gimbal.
 };
 
 struct ControlDecision {
