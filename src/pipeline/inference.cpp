@@ -14,13 +14,14 @@
 #include "core/state.h"
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
-#include "pipeline/run_trace.h"
+#include "pipeline/profiling.h"
 #include "pipeline/video_encoder.h"
 #include "tracking/prediction_overlay.h"
 
 #include "gstnvdsmeta.h"
 #include "log.h"
 #include "nvds_yml_parser.h"
+#include "patronus/profiling.h"
 
 #include <glib.h>
 #include <gst/gst.h>
@@ -73,6 +74,9 @@ namespace {
 
   /// Passed to the probe as u_data: source_id is 0 in both pipelines.
   struct CameraContext {
+#ifdef PATRONUS_PROFILING
+    const char *camera_name{nullptr};
+#endif
     const config::PipelineConfig *config{nullptr};
     core::LatestValue<core::FrameObservation> *output{nullptr};
     const tracking::PredictionChannel *predictions{nullptr};
@@ -119,6 +123,7 @@ namespace {
 
   /// A GenICam read over USB: call rarely.
   double read_exposure_s(CameraContext &ctx) {
+    PATRONUS_PROFILE(read_exposure_s, ctx.camera_name, UINT64_MAX);
     const std::scoped_lock lock(ctx.source_mutex);
     if (ctx.source == nullptr)
       return 0.0;
@@ -292,6 +297,7 @@ namespace {
   /// velocity to this one.
   std::optional<Projected> project_prediction(const tracking::PredictionChannel &predictions,
                                               size_t gimbal, double now_s) {
+    PATRONUS_PROFILE(project_prediction, "overlay", gimbal);
     const auto sample = predictions.get(gimbal);
     if (!sample.has_value())
       return std::nullopt;
@@ -310,6 +316,7 @@ namespace {
   /// Red ring: estimate. Blue arrow: velocity. Yellow: 3-sigma ellipse.
   /// Green dot: accepted detection.
   void draw_predictions(OsdWriter &osd, const CameraContext &ctx, double now_s) {
+    PATRONUS_PROFILE(draw_predictions, ctx.camera_name, UINT64_MAX);
     if (ctx.predictions == nullptr || ctx.config == nullptr || !ctx.config->draw_predictions_)
       return;
 
@@ -428,6 +435,7 @@ namespace {
   /// target.
   GstPadProbeReturn osd_sink_pad_buffer_probe(GstPad *pad, GstPadProbeInfo *info, gpointer u_data) {
     auto *ctx = static_cast<CameraContext *>(u_data);
+    PATRONUS_PROFILE(osd_sink_pad_buffer_probe, ctx->camera_name, UINT64_MAX);
 
     GstBuffer *buf = reinterpret_cast<GstBuffer *>(info->data);
     NvDsBatchMeta *batch_meta = gst_buffer_get_nvds_batch_meta(buf);
@@ -435,6 +443,9 @@ namespace {
       return GST_PAD_PROBE_OK;
 
     const double frame_t_s = core::steady_now_s();
+#ifdef PATRONUS_PROFILING
+    const auto profile_frame_ns = profiling::now_ns();
+#endif
 
     if (frame_t_s >= ctx->next_exposure_refresh_s) {
       ctx->next_exposure_refresh_s = frame_t_s + k_exposure_refresh_s;
@@ -460,13 +471,23 @@ namespace {
 
       core::FrameObservation obs;
       obs.timestamp_s_ = frame_t_s;
-      obs.frame_dt_s_ = advance_capture_clock(*ctx, GST_BUFFER_PTS(buf), frame_t_s);
+      obs.frame_dt_s_ =
+        PATRONUS_PROFILE_CALL(advance_capture_clock, ctx->camera_name, ctx->frame_id,
+                              advance_capture_clock(*ctx, GST_BUFFER_PTS(buf), frame_t_s));
       obs.capture_s_ = ctx->capture_s;
-      obs.captured_at_s_ =
-        captured_at(clock_now, base_time, frame_meta->buf_pts, frame_t_s, before_retrieval_s);
+      obs.captured_at_s_ = PATRONUS_PROFILE_CALL(
+        captured_at, ctx->camera_name, ctx->frame_id,
+        captured_at(clock_now, base_time, frame_meta->buf_pts, frame_t_s, before_retrieval_s));
       obs.readout_s_ = ctx->readout_s;
       obs.exposure_s_ = ctx->exposure_s;
       obs.frame_id_ = ++ctx->frame_id;
+#ifdef PATRONUS_PROFILING
+      if (obs.captured_at_s_ > 0.0) {
+        const auto age_ns = static_cast<int64_t>((frame_t_s - obs.captured_at_s_) * 1e9);
+        profiling::record("estimate", "capture_to_observation_estimate", ctx->camera_name,
+                          profile_frame_ns - age_ns, age_ns, 0.0, obs.frame_id_);
+      }
+#endif
       if (!ctx->logged_capture_age && obs.captured_at_s_ > 0.0) {
         ctx->logged_capture_age = true;
         LOG(Info, "Frame age at the tracking hand-off: "
@@ -476,29 +497,32 @@ namespace {
       }
 
       guint bird_count = 0;
-      for (NvDsMetaList *l_obj = frame_meta->obj_meta_list; l_obj != nullptr; l_obj = l_obj->next) {
-        const auto *obj_meta = static_cast<const NvDsObjectMeta *>(l_obj->data);
-        if (obj_meta->class_id != k_pgie_class_id_bird)
-          continue;
-        ++bird_count;
+      {
+        for (NvDsMetaList *l_obj = frame_meta->obj_meta_list; l_obj != nullptr;
+             l_obj = l_obj->next) {
+          const auto *obj_meta = static_cast<const NvDsObjectMeta *>(l_obj->data);
+          if (obj_meta->class_id != k_pgie_class_id_bird)
+            continue;
+          ++bird_count;
 
-        if (obs.detection_.has_value() && obj_meta->confidence <= obs.detection_->confidence_)
-          continue;
-        core::Detection det;
-        det.left_ = obj_meta->rect_params.left;
-        det.top_ = obj_meta->rect_params.top;
-        det.width_ = obj_meta->rect_params.width;
-        det.height_ = obj_meta->rect_params.height;
-        det.class_id_ = obj_meta->class_id;
-        det.confidence_ = obj_meta->confidence;
-        det.timestamp_s_ = frame_t_s;
-        det.frame_id_ = obs.frame_id_;
-        obs.detection_ = det;
+          if (obs.detection_.has_value() && obj_meta->confidence <= obs.detection_->confidence_)
+            continue;
+          core::Detection det;
+          det.left_ = obj_meta->rect_params.left;
+          det.top_ = obj_meta->rect_params.top;
+          det.width_ = obj_meta->rect_params.width;
+          det.height_ = obj_meta->rect_params.height;
+          det.class_id_ = obj_meta->class_id;
+          det.confidence_ = obj_meta->confidence;
+          det.timestamp_s_ = frame_t_s;
+          det.frame_id_ = obs.frame_id_;
+          obs.detection_ = det;
+        }
       }
 
       if (ctx->output != nullptr) {
         obs.published_s_ = core::steady_now_s();
-        ctx->output->push(obs);
+        PATRONUS_PROFILE_CALL(push, ctx->camera_name, obs.frame_id_, ctx->output->push(obs));
       }
 
       OsdWriter osd(batch_meta, frame_meta);
@@ -589,7 +613,8 @@ namespace {
 
     if (pipeline == nullptr || source == nullptr || capsfilter_src == nullptr ||
         nvvidconv_pre == nullptr || streammux == nullptr || nvvidconv == nullptr ||
-        nvosd == nullptr || nvvidconv_post == nullptr || payload_encode == nullptr || udp_sink == nullptr) {
+        nvosd == nullptr || nvvidconv_post == nullptr || payload_encode == nullptr ||
+        udp_sink == nullptr) {
       LOG(Error, "One element could not be created. Exiting.");
       return fail(pipeline);
     }
@@ -644,8 +669,7 @@ namespace {
     gst_object_unref(bus);
 
     gst_bin_add_many(GST_BIN(pipeline), source, capsfilter_src, nvvidconv_pre, streammux, pgie,
-                     nvvidconv, nvosd, nvvidconv_post, payload_encode,
-                     udp_sink, nullptr);
+                     nvvidconv, nvosd, nvvidconv_post, payload_encode, udp_sink, nullptr);
     LOG(Debug, "Added elements to bin");
 
     GstPad *sinkpad = gst_element_request_pad_simple(streammux, "sink_0");
@@ -668,8 +692,8 @@ namespace {
     }
 
     if (!gst_element_link_many(source, capsfilter_src, nvvidconv_pre, nullptr) ||
-        !gst_element_link_many(streammux, pgie, nvvidconv, nvosd, nvvidconv_post,
-                               encoder, payload_encode, udp_sink, nullptr)) {
+        !gst_element_link_many(streammux, pgie, nvvidconv, nvosd, nvvidconv_post, encoder,
+                               payload_encode, udp_sink, nullptr)) {
       LOG(Error, "Elements could not be linked. Exiting.");
       return fail(pipeline);
     }
@@ -683,7 +707,7 @@ namespace {
       gst_object_unref(osd_sink_pad);
     }
 
-    if (!install_run_trace(pipeline, camera == Camera::Rgb ? "rgb" : "mono"))
+    if (!PATRONUS_PROFILE_PIPELINE(pipeline, camera == Camera::Rgb ? "rgb" : "mono"))
       return fail(pipeline);
 
     LOG(Info, "Using pylonsrc (Basler camera serial " << config.camera_serial_ << ')');
@@ -699,6 +723,9 @@ namespace {
                    core::LatestValue<core::FrameObservation> &output,
                    tracking::PredictionChannel &predictions) {
     CameraContext &ctx = g_ctx[static_cast<int>(camera)];
+#ifdef PATRONUS_PROFILING
+    ctx.camera_name = camera == Camera::Rgb ? "rgb" : "mono";
+#endif
     ctx.config = &config;
     ctx.output = &output;
     ctx.predictions = &predictions;

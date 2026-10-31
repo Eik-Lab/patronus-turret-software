@@ -10,6 +10,12 @@ int main(int argc, char **argv) {
   if (argc != 2)
     return 2;
   gst_init(nullptr, nullptr);
+  g_unsetenv("PATRONUS_TRACE_DIR");
+  auto *disabled_pipeline = gst_pipeline_new("disabled");
+  const bool disabled_ok = patronus::pipeline::install_run_trace(disabled_pipeline, "disabled");
+  gst_object_unref(disabled_pipeline);
+  if (!disabled_ok)
+    return 6;
   g_setenv("PATRONUS_TRACE_DIR", argv[1], TRUE);
   for (const char *camera : {"rgb", "mono"}) {
     GError *error = nullptr;

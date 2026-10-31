@@ -9,7 +9,11 @@ control-loop or motor-bus benchmark.
 
 ## Before a run on Thor
 
-Build the current source with the normal production build procedure. Have
+Build with `-DPATRONUS_PROFILING=ON` for the stdout
+[host hotspot/CPU report](PROFILING.md), captured in the application log by this
+recording tool. Use `--no-trace`: the application no longer writes pad CSV files
+in either build mode. The legacy CSV analysis below applies only to archived
+runs or the standalone trace fixture. Have
 `gst-launch-1.0`, RTP/H264 parser and Matroska plugins, and `ffprobe` installed.
 Both selected inference configurations must reference existing working engines
 and parser libraries. The recorder copies INI configs, resolves model paths and
@@ -53,9 +57,10 @@ camera summaries and application logs, not just its exit code.
 Run the same scene with `--mode rgb`, `--mode mono`, then `--mode both`; repeat
 the sequence in reversed order to expose thermal/order effects. Use identical
 engines, resolutions, frame-rate settings, exposure and encoder configuration.
-Collect at least three repetitions per condition. To measure **additional pad
-tracing overhead**, repeat matched runs with `--no-trace`; this keeps telemetry,
-receivers, resource sampling and logging enabled. It is not a measurement of
+Collect at least three repetitions per condition. To measure profiling overhead,
+compare builds configured with `-DPATRONUS_PROFILING=ON` and `OFF`, using
+`--no-trace` for both. This keeps telemetry, receivers, resource sampling and
+logging enabled. It is not a measurement of
 total recording overhead versus ordinary production. Recording and local
 receivers themselves consume CPU, memory bandwidth and disk bandwidth.
 
@@ -119,6 +124,12 @@ do not compare only the successful samples. Analysis runs after recording stops
 so decoding does not contaminate the live measurement interval.
 
 ## Camera-free verification
+
+The legacy CSV tracer is now a copyable, standalone CMake subproject in
+[`tracing/`](../tracing/README.md), linked as `patronus::tracing`. The application
+adapter retains `PATRONUS_TRACE_DIR` and its camera/pad mapping. This extraction
+does not re-enable CSV tracing in the inference executable or change the stdout
+profiler. The standalone tracer requires GStreamer but no NVIDIA/camera SDKs.
 
 The replay CMake configuration registers `live_recording`; when GStreamer
 development libraries are available it also builds a fakesrc/identity trace

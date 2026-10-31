@@ -1,5 +1,7 @@
 #include "tracking/target_filter.h"
 
+#include "patronus/profiling.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -106,6 +108,7 @@ namespace {
   /// Cap target extrapolation, not measured camera rotation. Extrapolate the
   /// pose through actuation latency so commands ease off before arrival.
   AimPoint project_aim(const FilterState &f, const FilterParameters &params, double now_s) {
+    PATRONUS_PROFILE(project_aim, "tracking", UINT64_MAX);
     const double t_aim = now_s + params.actuation_s;
     const double age = std::max(0.0, t_aim - f.frame_capture_s);
     const auto h = static_cast<float>(std::min(age, params.max_lead_s));

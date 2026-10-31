@@ -5,6 +5,7 @@
 #include "core/state.h"
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
+#include "pipeline/profiling.h"
 #include "tracking/aim_control.h"
 #include "tracking/control_state.h"
 #include "tracking/manual_control.h"
@@ -13,6 +14,7 @@
 #include "tracking/telemetry.h"
 
 #include "log.h"
+#include "patronus/profiling.h"
 
 #include <glib.h>
 #include <gst/gst.h>
@@ -76,6 +78,17 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   g_option_context_free(ctx);
+
+#ifdef PATRONUS_PROFILING
+  std::unique_ptr<patronus::profiling::Session> profiling;
+  try {
+    profiling =
+      std::make_unique<patronus::profiling::Session>(patronus::pipeline::profiling_report());
+  } catch (const std::exception &error) {
+    LOG(Error, "Cannot start profiling: " << error.what());
+    return 1;
+  }
+#endif
 
   std::string cfg_path = config_path ? config_path : "config/system.ini";
   SystemConfig cfg = load_config(cfg_path);
@@ -203,6 +216,9 @@ int main(int argc, char *argv[]) {
       tracking_threads.emplace_back([motor = drive_motor, g, trk, gimbal_cfg, pipe, use_rgb,
                                      predictions, follower_ids, all_gimbals, telemetry]() {
         auto *det = use_rgb ? &detection_rgb : &detection_mono;
+#ifdef PATRONUS_PROFILING
+        const std::string profile_stream = "gimbal-" + std::to_string(g);
+#endif
 
         const bool driving = motor != nullptr;
         const auto home = driving ? motor->home_position(g) : std::pair<float, float>{0.0F, 0.0F};
@@ -293,6 +309,7 @@ int main(int argc, char *argv[]) {
         bool tick_pending = false;
 
         while (running) {
+          PATRONUS_PROFILE(tracking_tick, profile_stream.c_str(), UINT64_MAX);
           double submit_us = 0.0;
           if (telemetry && tick_pending) {
             const double submit_start = patronus::core::steady_now_s();
@@ -319,6 +336,7 @@ int main(int argc, char *argv[]) {
 
           // Stamped mid-read: each axis is a separate CAN round trip.
           if (driving) {
+            PATRONUS_PROFILE(pose_read, profile_stream.c_str(), UINT64_MAX);
             tick_rec.position = motor->get_position(g, bus_metrics);
             const double read_end_s = patronus::core::steady_now_s();
             tick_rec.pose_read_us = (read_end_s - t_s) * 1.0e6;
@@ -328,7 +346,9 @@ int main(int argc, char *argv[]) {
 
           const double wait_s = telemetry ? patronus::core::steady_now_s() : 0.0;
           const auto previous_cursor = observation_cursor;
-          const auto opt = det->try_read(observation_cursor, tick);
+          const auto opt =
+            PATRONUS_PROFILE_CALL(observation_wait, profile_stream.c_str(), UINT64_MAX,
+                                  det->try_read(observation_cursor, tick));
           if (telemetry) {
             const double received_s = patronus::core::steady_now_s();
             tick_rec.observation_wait_us = (received_s - wait_s) * 1.0e6;
@@ -358,7 +378,10 @@ int main(int argc, char *argv[]) {
           if (trk.filter_enabled_ && tick_rec.pose_usable) {
             if (opt.has_value()) {
               const double step_s = patronus::core::steady_now_s();
-              est = patronus::tracking::step_filter(filter, filter_params, *opt, step_s);
+              {
+                PATRONUS_PROFILE(step_filter, profile_stream.c_str(), opt->frame_id_);
+                est = patronus::tracking::step_filter(filter, filter_params, *opt, step_s);
+              }
               if (telemetry)
                 tick_rec.filter_us = (patronus::core::steady_now_s() - step_s) * 1.0e6;
               if (telemetry)
@@ -402,8 +425,9 @@ int main(int argc, char *argv[]) {
             tick_rec.pose_usable,
             manual_control.manual()};
           const double control_start_s = telemetry ? patronus::core::steady_now_s() : 0.0;
-          const auto decision =
-            patronus::tracking::step_control(control, control_params, control_input);
+          const auto decision = PATRONUS_PROFILE_CALL(
+            control, profile_stream.c_str(), UINT64_MAX,
+            patronus::tracking::step_control(control, control_params, control_input));
           if (telemetry)
             tick_rec.control_us = (patronus::core::steady_now_s() - control_start_s) * 1e6;
           tick_rec.control_elapsed_ns = control_input.now_ns - control_start_ns;

@@ -3,6 +3,7 @@
 #include "core/state.h"
 
 #include "log.h"
+#include "patronus/profiling.h"
 
 #include <algorithm>
 #include <candlelib.hpp>
@@ -197,13 +198,16 @@ void CandleMotor::wait_feeding(const mab::MD *active, int ms) {
 
 // Call with the bus lock held. Each axis has its own exchange midpoint.
 static AxisReading read_axis(mab::MD *md, BusMetrics *metrics, bool velocity = false) {
+  PATRONUS_PROFILE(read_axis, "motor", UINT64_MAX);
   AxisReading result;
   if (!md) {
     result.status = IoStatus::Unavailable;
     return result;
   }
   const double start = core::steady_now_s();
-  const auto sample = velocity ? md->getVelocity() : md->getPosition();
+  const auto sample =
+    velocity ? PATRONUS_PROFILE_CALL(getVelocity, "motor", UINT64_MAX, md->getVelocity())
+             : PATRONUS_PROFILE_CALL(getPosition, "motor", UINT64_MAX, md->getPosition());
   const double end = core::steady_now_s();
   result.time_s = 0.5 * (start + end);
   if (metrics) {
@@ -221,6 +225,7 @@ static AxisReading read_axis(mab::MD *md, BusMetrics *metrics, bool velocity = f
 
 float CandleMotor::apply_limit(mab::MD *md, const SoftLimit &limit, float velocity,
                                AxisReading &position, BusMetrics *metrics) {
+  PATRONUS_PROFILE(apply_limit, "motor", UINT64_MAX);
   if (md == nullptr || !limit.calibrated || velocity == 0.0F)
     return velocity;
 
@@ -477,6 +482,7 @@ bool CandleMotor::boot_sequence() {
 }
 
 static std::unique_lock<std::mutex> lock_bus(std::mutex &mutex, BusMetrics *metrics) {
+  PATRONUS_PROFILE(lock_bus, "motor", UINT64_MAX);
   const double start = metrics ? core::steady_now_s() : 0.0;
   std::unique_lock<std::mutex> lock(mutex);
   if (metrics)
@@ -485,13 +491,15 @@ static std::unique_lock<std::mutex> lock_bus(std::mutex &mutex, BusMetrics *metr
 }
 
 static void write_axis(mab::MD *md, float velocity, AxisCommand &result, BusMetrics *metrics) {
+  PATRONUS_PROFILE(write_axis, "motor", UINT64_MAX);
   if (!md) {
     result.status = IoStatus::Unavailable;
     return;
   }
   result.attempted = velocity;
   const double start = metrics ? core::steady_now_s() : 0.0;
-  const auto error = md->setTargetVelocity(velocity);
+  const auto error =
+    PATRONUS_PROFILE_CALL(setTargetVelocity, "motor", UINT64_MAX, md->setTargetVelocity(velocity));
   if (metrics) {
     metrics->write_us += (core::steady_now_s() - start) * 1e6;
     ++metrics->write_calls;
@@ -502,12 +510,14 @@ static void write_axis(mab::MD *md, float velocity, AxisCommand &result, BusMetr
 
 MotorCommand CandleMotor::set_velocity(size_t gimbal, float pan_rad_s, float tilt_rad_s,
                                        BusMetrics *metrics) {
+  PATRONUS_PROFILE(set_velocity, "motor", gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   return set_velocity_locked(gimbal, pan_rad_s, tilt_rad_s, metrics);
 }
 
 MotorCommand CandleMotor::set_velocity_locked(size_t gimbal, float pan_rad_s, float tilt_rad_s,
                                               BusMetrics *metrics) {
+  PATRONUS_PROFILE(set_velocity_locked, "motor", gimbal);
   MotorCommand result;
   result.pan.requested = pan_rad_s;
   result.tilt.requested = tilt_rad_s;
@@ -547,6 +557,7 @@ MotorCommand CandleMotor::set_velocity_locked(size_t gimbal, float pan_rad_s, fl
 }
 
 MotorReading CandleMotor::get_velocity(size_t gimbal, BusMetrics *metrics) {
+  PATRONUS_PROFILE(get_velocity, "motor", gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   return {
     read_axis(gimbal < pan_motors_.size() ? pan_motors_[gimbal].get() : nullptr, metrics, true),
@@ -554,11 +565,13 @@ MotorReading CandleMotor::get_velocity(size_t gimbal, BusMetrics *metrics) {
 }
 
 MotorReading CandleMotor::get_position(size_t gimbal, BusMetrics *metrics) {
+  PATRONUS_PROFILE(get_position, "motor", gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   return get_position_locked(gimbal, metrics);
 }
 
 MotorReading CandleMotor::get_position_locked(size_t gimbal, BusMetrics *metrics) {
+  PATRONUS_PROFILE(get_position_locked, "motor", gimbal);
   MotorReading result;
   result.pan =
     read_axis(gimbal < pan_motors_.size() ? pan_motors_[gimbal].get() : nullptr, metrics);
@@ -579,6 +592,7 @@ std::pair<float, float> CandleMotor::home_position(size_t gimbal) const {
 MotionResult CandleMotor::return_to_home(size_t gimbal, float position_gain, float tolerance_rad,
                                          float max_velocity_rad_s, double max_pose_age_s,
                                          BusMetrics *metrics) {
+  PATRONUS_PROFILE(return_to_home, "motor", gimbal);
   const auto [home_pan, home_tilt] = home_position(gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   return drive_to_locked(gimbal, home_pan, home_tilt, position_gain, tolerance_rad,
@@ -589,6 +603,7 @@ MotionResult CandleMotor::drive_to(size_t gimbal, float pan_rad, float tilt_rad,
                                    float position_gain, float tolerance_rad,
                                    float max_velocity_rad_s, double max_pose_age_s,
                                    BusMetrics *metrics) {
+  PATRONUS_PROFILE(drive_to, "motor", gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   return drive_to_locked(gimbal, pan_rad, tilt_rad, position_gain, tolerance_rad,
                          max_velocity_rad_s, max_pose_age_s, false, metrics);
@@ -598,6 +613,7 @@ MotionResult CandleMotor::drive_to_locked(size_t gimbal, float pan_rad, float ti
                                           float position_gain, float tolerance_rad,
                                           float max_velocity_rad_s, double max_pose_age_s,
                                           bool stop_at_target, BusMetrics *metrics) {
+  PATRONUS_PROFILE(drive_to_locked, "motor", gimbal);
   MotionResult result;
   result.position = get_position_locked(gimbal, metrics);
   if (!result.position.fresh(core::steady_now_s(), max_pose_age_s)) {
@@ -630,6 +646,7 @@ MotionResult CandleMotor::mirror_pose(size_t gimbal, float pan_rad, float tilt_r
                                       float pan_velocity_rad_s, float tilt_velocity_rad_s,
                                       float position_gain, double max_pose_age_s,
                                       BusMetrics *metrics) {
+  PATRONUS_PROFILE(mirror_pose, "motor", gimbal);
   const auto lock = lock_bus(bus_mutex_, metrics);
   MotionResult result;
   result.position = get_position_locked(gimbal, metrics);

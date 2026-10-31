@@ -59,5 +59,6 @@ __pycache__/
 # Tracking telemetry runs ([telemetry] in config/system.ini)
 telemetry/
 live-runs/
+/build-profile/
 
 model_training/

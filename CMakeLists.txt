@@ -18,6 +18,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 option(PATRONUS_REPLAY_ONLY "Build hardware-independent tracking replay only"
        OFF)
 
+add_subdirectory(profiling)
+
 # Jetson AGX Thor is Blackwell, sm_11.0. Override with
 # -DCMAKE_CUDA_ARCHITECTURES=native to build for the local GPU instead.
 if(CMAKE_CUDA_COMPILER)
@@ -91,7 +93,8 @@ if(PATRONUS_REPLAY_ONLY)
     src/tracking/target_filter.cpp src/tracking/aim_control.cpp
     src/tracking/control_state.cpp)
   target_include_directories(tracking_replay PRIVATE src)
-  target_link_libraries(tracking_replay PRIVATE kalman::kalman PkgConfig::GLIB)
+  target_link_libraries(tracking_replay PRIVATE kalman::kalman PkgConfig::GLIB
+                                                patronus_profiling)
   find_package(Threads REQUIRED)
   add_executable(telemetry_fixture tools/test_telemetry.cpp
                                    src/tracking/telemetry.cpp)
@@ -112,6 +115,13 @@ if(PATRONUS_REPLAY_ONLY)
   target_include_directories(manual_control_test PRIVATE src)
   add_test(NAME manual_control COMMAND manual_control_test)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  # Deliberately do not link patronus_profiling: test the OFF API even in ON
+  # builds.
+  add_executable(profiling_disabled_test tools/test_profiling_disabled.cpp)
+  target_include_directories(profiling_disabled_test PRIVATE src
+                                                             profiling/include)
+  target_compile_options(profiling_disabled_test PRIVATE -O0)
+  add_test(NAME profiling_disabled COMMAND profiling_disabled_test)
   add_executable(actuator_calibration src/tools/actuator_calibration.cpp)
   target_compile_definitions(actuator_calibration
                              PRIVATE PATRONUS_CALIBRATION_SIMULATION=1)
@@ -130,12 +140,24 @@ if(PATRONUS_REPLAY_ONLY)
       ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tracking_replay.py
       $<TARGET_FILE:tracking_replay> $<TARGET_FILE:telemetry_fixture>)
   pkg_check_modules(GSTREAMER QUIET IMPORTED_TARGET gstreamer-1.0)
-  if(GSTREAMER_FOUND)
+  if(GSTREAMER_FOUND AND PATRONUS_PROFILING)
+    add_subdirectory(tracing)
+    add_executable(
+      profiling_fixture tools/test_profiling.cpp src/pipeline/profiling.cpp
+                        src/pipeline/profiling_report.cpp)
+    target_include_directories(profiling_fixture PRIVATE src)
+    target_link_libraries(profiling_fixture PRIVATE patronus_profiling
+                                                    PkgConfig::GSTREAMER)
+    add_test(
+      NAME profiling
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_profiling.py
+        $<TARGET_FILE:profiling_fixture>)
     add_executable(run_trace_fixture tools/test_run_trace.cpp
                                      src/pipeline/run_trace.cpp)
     target_include_directories(run_trace_fixture PRIVATE src)
-    target_link_libraries(run_trace_fixture PRIVATE PkgConfig::GSTREAMER
-                                                    Threads::Threads)
+    target_link_libraries(run_trace_fixture PRIVATE patronus::tracing)
     add_test(
       NAME live_recording
       COMMAND
