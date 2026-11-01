@@ -76,7 +76,7 @@ set(INFERENCE_HEADERS
 
 add_executable(inference ${INFERENCE_SOURCES})
 target_sources(inference PRIVATE ${INFERENCE_HEADERS})
-target_link_libraries(inference PRIVATE patronus_profiling)
+target_link_libraries(inference PRIVATE patronus_profiling patronus::logging)
 if(PATRONUS_PROFILING)
   target_sources(inference PRIVATE pipeline/profiling.cpp
                                    pipeline/profiling_report.cpp)
@@ -133,7 +133,8 @@ find_path(
 if(PYLON_INCLUDE_DIR AND PYLON_LIB_DIR)
   add_executable(focal_calib tools/focal_calib.cpp core/config.cpp
                              comm/candle_motor.cpp)
-  target_link_libraries(focal_calib PRIVATE patronus_profiling)
+  target_link_libraries(focal_calib PRIVATE patronus_profiling
+                                            patronus::logging)
   target_include_directories(
     focal_calib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} /usr/include/glib-2.0
                         /usr/lib/${LINUX_ARCH}-linux-gnu/glib-2.0/include)

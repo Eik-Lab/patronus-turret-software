@@ -4,10 +4,9 @@
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
 
-#include "log.h"
-
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <patronus/logging.h>
 #include <sys/socket.h>
 #include <unistd.h>
 

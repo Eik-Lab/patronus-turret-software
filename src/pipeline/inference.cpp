@@ -19,12 +19,13 @@
 #include "tracking/prediction_overlay.h"
 
 #include "gstnvdsmeta.h"
-#include "log.h"
 #include "nvds_yml_parser.h"
 #include "patronus/profiling.h"
 
 #include <glib.h>
 #include <gst/gst.h>
+
+#include <patronus/logging.h>
 
 #include <algorithm>
 #include <cmath>

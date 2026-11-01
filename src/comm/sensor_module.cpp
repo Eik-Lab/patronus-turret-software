@@ -1,8 +1,7 @@
 #include "comm/sensor_module.h"
 
-#include "log.h"
-
 #include <fcntl.h>
+#include <patronus/logging.h>
 #include <poll.h>
 #include <unistd.h>
 

@@ -1,6 +1,6 @@
 #include "pipeline/video_encoder.h"
 
-#include "log.h"
+#include <patronus/logging.h>
 
 #include <limits>
 

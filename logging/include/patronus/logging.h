@@ -9,6 +9,8 @@
 #include <sstream>
 #include <string>
 
+namespace patronus::logging {
+
 enum class Level { Debug, Info, Warning, Error, Critical, Count };
 
 struct LevelInfo {
@@ -25,7 +27,9 @@ inline constexpr LevelInfo log_levels[log_level_count] = {{"DEBUG", "\033[90m"},
                                                           {"CRITICAL", "\033[1;31m"}};
 
 struct LogState {
-  std::ofstream file_{"patronus.log", std::ios::app};
+  std::optional<std::string> file_path_{"patronus.log"};
+  std::ofstream file_;
+  bool file_initialized_{false};
   std::atomic<Level> min_level_{Level::Warning};
   std::mutex mutex_;
   char stamp_[20]{};
@@ -43,6 +47,23 @@ inline void set_log_level(Level level) {
   log_state().min_level_.store(level, std::memory_order_relaxed);
 }
 
+// Append to path, or pass std::nullopt for console-only logging.
+// A failed open leaves console logging enabled and returns false.
+inline bool set_log_file(const std::optional<std::string> &path) {
+  LogState &s = log_state();
+  const std::scoped_lock lock(s.mutex_);
+  if (s.file_.is_open())
+    s.file_.close();
+  s.file_.clear();
+  s.file_path_ = path;
+  s.file_initialized_ = true;
+  s.warned_ = false;
+  if (!path)
+    return true;
+  s.file_.open(*path, std::ios::app);
+  return s.file_.is_open();
+}
+
 inline void log_write(Level level, const std::string &message) {
   LogState &s = log_state();
   const std::scoped_lock lock(s.mutex_);
@@ -58,10 +79,17 @@ inline void log_write(Level level, const std::string &message) {
   std::cout << '[' << s.stamp_ << "] " << info.color << info.name << "\033[0m" << ": " << message
             << std::endl;
 
+  if (!s.file_path_)
+    return;
+
+  if (!s.file_initialized_) {
+    s.file_initialized_ = true;
+    s.file_.open(*s.file_path_, std::ios::app);
+  }
   if (!s.file_.is_open()) {
     if (!s.warned_) {
       s.warned_ = true;
-      std::cerr << "Patronus: cannot open patronus.log, logging to the console only\n";
+      std::cerr << "Patronus: cannot open " << *s.file_path_ << ", logging to the console only\n";
     }
     return;
   }
@@ -81,9 +109,9 @@ inline void log_line(Level level, const Format &format) {
   log_write(level, buf.str());
 }
 
-#define LOG(level, ...)                       \
-  ::log_line(::Level::level, [&](auto &buf) { \
-    buf << __VA_ARGS__;                       \
+#define LOG(level, ...)                                                             \
+  ::patronus::logging::log_line(::patronus::logging::Level::level, [&](auto &buf) { \
+    buf << __VA_ARGS__;                                                             \
   })
 
 inline std::optional<Level> parse_level(const std::string &text) {
@@ -99,3 +127,5 @@ inline std::optional<Level> parse_level(const std::string &text) {
     return Level::Critical;
   return std::nullopt;
 }
+
+} // namespace patronus::logging

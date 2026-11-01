@@ -1,7 +1,8 @@
 #include "pipeline/profiling.h"
 
-#include "log.h"
 #include "patronus/profiling.h"
+
+#include <patronus/logging.h>
 
 #include <mutex>
 #include <string>

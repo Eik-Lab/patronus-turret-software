@@ -13,11 +13,12 @@
 #include "tracking/target_filter.h"
 #include "tracking/telemetry.h"
 
-#include "log.h"
 #include "patronus/profiling.h"
 
 #include <glib.h>
 #include <gst/gst.h>
+
+#include <patronus/logging.h>
 
 #include <atomic>
 #include <chrono>
@@ -100,8 +101,8 @@ int main(int argc, char *argv[]) {
     cfg.command_.enabled_ = false;
   }
 
-  if (const auto level = parse_level(cfg.log_level_); level.has_value()) {
-    set_log_level(*level);
+  if (const auto level = patronus::logging::parse_level(cfg.log_level_); level.has_value()) {
+    patronus::logging::set_log_level(*level);
   } else {
     LOG(Warning, "Unknown [general] log_level '"
                    << cfg.log_level_

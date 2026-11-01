@@ -19,6 +19,7 @@ option(PATRONUS_REPLAY_ONLY "Build hardware-independent tracking replay only"
        OFF)
 
 add_subdirectory(profiling)
+add_subdirectory(logging)
 
 # Jetson AGX Thor is Blackwell, sm_11.0. Override with
 # -DCMAKE_CUDA_ARCHITECTURES=native to build for the local GPU instead.
@@ -93,14 +94,15 @@ if(PATRONUS_REPLAY_ONLY)
     src/tracking/target_filter.cpp src/tracking/aim_control.cpp
     src/tracking/control_state.cpp)
   target_include_directories(tracking_replay PRIVATE src)
-  target_link_libraries(tracking_replay PRIVATE kalman::kalman PkgConfig::GLIB
-                                                patronus_profiling)
+  target_link_libraries(
+    tracking_replay PRIVATE kalman::kalman PkgConfig::GLIB patronus_profiling
+                            patronus::logging)
   find_package(Threads REQUIRED)
   add_executable(telemetry_fixture tools/test_telemetry.cpp
                                    src/tracking/telemetry.cpp)
   target_include_directories(telemetry_fixture PRIVATE src)
-  target_link_libraries(telemetry_fixture PRIVATE Threads::Threads
-                                                  kalman::kalman)
+  target_link_libraries(
+    telemetry_fixture PRIVATE Threads::Threads kalman::kalman patronus::logging)
   enable_testing()
   add_executable(observation_channel_test tools/test_observation_channel.cpp)
   target_include_directories(observation_channel_test PRIVATE src)
@@ -146,8 +148,9 @@ if(PATRONUS_REPLAY_ONLY)
       profiling_fixture tools/test_profiling.cpp src/pipeline/profiling.cpp
                         src/pipeline/profiling_report.cpp)
     target_include_directories(profiling_fixture PRIVATE src)
-    target_link_libraries(profiling_fixture PRIVATE patronus_profiling
-                                                    PkgConfig::GSTREAMER)
+    target_link_libraries(
+      profiling_fixture PRIVATE patronus_profiling patronus::logging
+                                PkgConfig::GSTREAMER)
     add_test(
       NAME profiling
       COMMAND

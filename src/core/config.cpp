@@ -1,8 +1,8 @@
 #include "core/config.h"
 
-#include "log.h"
-
 #include <glib.h>
+
+#include <patronus/logging.h>
 
 #include <algorithm>
 #include <cstdio>

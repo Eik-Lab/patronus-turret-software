@@ -2,8 +2,9 @@
 
 #include "core/state.h"
 
-#include "log.h"
 #include "patronus/profiling.h"
+
+#include <patronus/logging.h>
 
 #include <algorithm>
 #include <candlelib.hpp>

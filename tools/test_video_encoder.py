@@ -1,7 +1,8 @@
 """Offline encoder regression: DRIVER [--thor]. Requires GStreamer plugins and ffprobe.
 
 Build DRIVER with tools/test_video_encoder.cpp, src/pipeline/video_encoder.cpp,
-src/core/config.cpp, -Isrc and pkg-config --cflags --libs gstreamer-1.0.
+src/core/config.cpp, -Isrc -Ilogging/include -pthread and
+pkg-config --cflags --libs gstreamer-1.0.
 """
 import json
 from pathlib import Path
