@@ -10,6 +10,7 @@
 
 #include "comm/candle_motor.h"
 #include "core/config.h"
+#include "core/state.h"
 
 #include <pylon/PylonIncludes.h>
 
@@ -36,6 +37,7 @@ constexpr float k_abort_rad = 0.08F;
 /// Before velocity_scale (0.05).
 constexpr float k_gain = 100.0F;
 constexpr float k_max_velocity = 4.0F;
+constexpr double k_max_pose_age_s = 0.45; // 45 iterations of this tool's 10 ms loop.
 constexpr std::array<float, 7> k_offsets{0.0F, -0.03F, -0.015F, 0.0F, 0.015F, 0.03F, 0.0F};
 constexpr float k_still_rad = 0.0001F;
 constexpr auto k_still_for = 300ms;
@@ -85,7 +87,12 @@ void motor_loop(patronus::comm::CandleMotor &motor, Shared &s, Pose start) {
       const std::scoped_lock lock(s.mutex);
       target = s.target;
     }
-    const auto [pan, tilt] = motor.get_position(0);
+    const auto reading = motor.get_position(0);
+    if (!reading.fresh(patronus::core::steady_now_s(), k_max_pose_age_s)) {
+      s.aborted = true;
+      break;
+    }
+    const auto pan = reading.pan.value, tilt = reading.tilt.value;
     {
       const std::scoped_lock lock(s.mutex);
       s.pose = Pose{pan, tilt};
@@ -94,7 +101,13 @@ void motor_loop(patronus::comm::CandleMotor &motor, Shared &s, Pose start) {
       s.aborted = true;
       break;
     }
-    motor.drive_to(0, target.pan, target.tilt, k_gain, 0.0F, k_max_velocity);
+    const auto motion =
+      motor.drive_to(0, target.pan, target.tilt, k_gain, 0.0F, k_max_velocity, k_max_pose_age_s);
+    if (!motion.command.ok() ||
+        !motion.position.fresh(patronus::core::steady_now_s(), k_max_pose_age_s)) {
+      s.aborted = true;
+      break;
+    }
     std::this_thread::sleep_for(10ms);
   }
   motor.set_velocity(0, 0.0F, 0.0F);
@@ -287,8 +300,12 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "motor init failed\n");
     return 1;
   }
-  const auto [start_pan, start_tilt] = motor.get_position(0);
-  const Pose start{start_pan, start_tilt};
+  const auto initial = motor.get_position(0);
+  if (!initial.fresh(patronus::core::steady_now_s(), k_max_pose_age_s)) {
+    std::fprintf(stderr, "initial motor pose unavailable or stale\n");
+    return 1;
+  }
+  const Pose start{initial.pan.value, initial.tilt.value};
   std::printf("start pose pan %.5f tilt %.5f\n", static_cast<double>(start.pan),
               static_cast<double>(start.tilt));
 
@@ -337,10 +354,13 @@ int main(int argc, char **argv) {
   }
   s.run = false;
   loop.join();
-  const auto [end_pan, end_tilt] = motor.get_position(0);
+  const auto final = motor.get_position(0);
+  if (!final.fresh(patronus::core::steady_now_s(), k_max_pose_age_s))
+    s.aborted = true;
   motor.disable();
-  std::printf("end pose pan %.5f tilt %.5f%s\n", static_cast<double>(end_pan),
-              static_cast<double>(end_tilt), s.aborted ? "  ABORTED: left the safety window" : "");
+  std::printf("end pose pan %.5f tilt %.5f%s\n", static_cast<double>(final.pan.value),
+              static_cast<double>(final.tilt.value),
+              s.aborted ? "  ABORTED: safety window or motor I/O failure" : "");
   std::fflush(stdout);
   std::fflush(stderr);
 

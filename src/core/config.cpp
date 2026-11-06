@@ -61,6 +61,7 @@ static PipelineConfig read_pipeline(GKeyFile *kf, const gchar *group) {
   cfg.udp_host_ = read_string(kf, group, "udp_host", "127.0.0.1");
   cfg.udp_port_ = read_uint<uint16_t>(kf, group, "udp_port", 5000);
   cfg.encoder_bitrate_ = read_uint<uint32_t>(kf, group, "encoder_bitrate", 3000);
+  cfg.encoder_backend_ = read_string(kf, group, "encoder_backend", "x264");
   cfg.muxer_width_ = read_uint<uint32_t>(kf, group, "muxer_width", 1920);
   cfg.muxer_height_ = read_uint<uint32_t>(kf, group, "muxer_height", 1088);
   cfg.focal_x_px_ = read_float(kf, group, "focal_x_px", 0.0F);
@@ -170,6 +171,14 @@ static TrackingConfig read_tracking(GKeyFile *kf, const gchar *group,
     read_float(kf, group, "home_return_max_velocity", cfg.home_return_max_velocity_);
   if (cfg.home_return_max_velocity_ <= 0.0F)
     cfg.home_return_max_velocity_ = 1.5F;
+
+  cfg.manual_speed_ = read_float(kf, group, "manual_speed", cfg.manual_speed_);
+  if (cfg.manual_speed_ <= 0.0F || cfg.manual_speed_ > 1.0F)
+    cfg.manual_speed_ = 0.25F;
+  cfg.manual_timeout_ms_ = static_cast<int>(read_uint<uint16_t>(
+    kf, group, "manual_timeout_ms", static_cast<uint16_t>(cfg.manual_timeout_ms_)));
+  if (cfg.manual_timeout_ms_ <= 0)
+    cfg.manual_timeout_ms_ = 150;
 
   cfg.filter_enabled_ = read_bool(kf, group, "filter_enabled", cfg.filter_enabled_);
   cfg.filter_meas_sigma_px_ =

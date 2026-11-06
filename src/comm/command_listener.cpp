@@ -1,5 +1,6 @@
 #include "comm/command_listener.h"
 
+#include "core/state.h"
 #include "pipeline/inference_mono.h"
 #include "pipeline/inference_rgb.h"
 
@@ -47,7 +48,8 @@ namespace {
 void handle_capture_image() {
 }
 
-void run_command_thread(const std::string &host, uint16_t port, std::atomic<bool> &running) {
+void run_command_thread(const std::string &host, uint16_t port, std::atomic<bool> &running,
+                        patronus::tracking::ManualControl &manual) {
   int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (sockfd < 0) {
     LOG(Error, "CommandListener: Failed to create socket");
@@ -89,6 +91,11 @@ void run_command_thread(const std::string &host, uint16_t port, std::atomic<bool
       increase_exposure(argument);
     } else if (name == "dec_exp") {
       decrease_exposure(argument);
+    } else if (name == "mode") {
+      if (manual.set_mode(argument))
+        LOG(Warning, "CommandListener: Control mode " << argument);
+    } else if (name == "move") {
+      manual.move(argument, patronus::core::steady_now_s());
     } else {
     }
   }

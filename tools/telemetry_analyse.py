@@ -113,7 +113,7 @@ def heading(text):
 
 
 def effective_pan(ticks, level_tilt):
-    """Pan folded by cos(elevation), integrated like TargetFilter::push_angle."""
+    """Pan folded by cos(elevation), integrated like push_gimbal_sample."""
     pan = ticks["pan"]
     tilt = ticks["tilt"]
     d = np.remainder(np.diff(pan) + math.pi, 2 * math.pi) - math.pi
@@ -168,7 +168,7 @@ def report_timing(frames, ticks):
           + ("" if have.all() else "  (the rest fall back to filter_pipeline_latency_ms)"))
     if have.any():
         f = select(frames, have)
-        print(f"capture -> probe (inference):     {stats_ms(f['timestamp_s'] - f['captured_at_s'])}")
+        print(f"capture -> probe (aggregate pipeline): {stats_ms(f['timestamp_s'] - f['captured_at_s'])}")
         print(f"capture -> filter step:           {stats_ms(f['step_s'] - f['captured_at_s'])}")
         print(f"readout used {1e3 * np.nanmedian(f['readout_s']):.2f} ms, "
               f"exposure {1e3 * np.nanmedian(f['exposure_s']):.2f} ms "
@@ -488,6 +488,62 @@ def report_stabilisation(frames, ticks, gcfg, stationary):
           "own motion plus jitter); a much larger one means the bird moved after all.")
 
 
+def report_performance(ticks):
+    if "loop_us" not in ticks:
+        return
+    print("\n--- wall-time costs (including blocking/scheduling), microseconds ---")
+    print("Nested timings overlap: bus costs are included in leader/follower operations; do not sum them.")
+
+    def summary(label, values, include_zero=False):
+        values = values[np.isfinite(values) & (values >= 0 if include_zero else values > 0)]
+        if values.size:
+            print(f"{label}: n={values.size} p50={pct(values, 50):.3f} "
+                  f"p99={pct(values, 99):.3f} max={np.max(values):.3f}")
+
+    def interval(label, start_key, end_key, eligible=None):
+        if start_key not in ticks or end_key not in ticks:
+            return
+        start, end = ticks[start_key], ticks[end_key]
+        mask = np.isfinite(start) & np.isfinite(end) & (start > 0) & (end >= start)
+        if eligible is not None:
+            mask &= eligible
+        summary(label, (end[mask] - start[mask]) * 1e6, include_zero=True)
+
+    for key in ("loop_us", "pose_read_us", "observation_wait_us", "filter_us", "control_us",
+                "aim_compute_us", "follower_us", "previous_submit_us", "bus_lock_wait_us",
+                "sdk_read_us", "sdk_write_us"):
+        if key in ticks:
+            summary(key, ticks[key])
+    if "iteration_us" in ticks:
+        summary("loop start spacing", ticks["iteration_us"])
+    elif "loop_start_s" in ticks:
+        summary("loop start spacing", np.diff(ticks["loop_start_s"]) * 1e6)
+    for key in ("sdk_read_calls", "sdk_write_calls", "skipped_observations"):
+        if key in ticks:
+            values = ticks[key][np.isfinite(ticks[key])]
+            print(f"{key}: total={np.sum(values):.0f}")
+            summary(key + " per tick (count)", values, include_zero=True)
+
+    interval("leader command call (all attempts)", "command_start_s", "command_done_s")
+    interval("aim through leader command return", "aim_s", "command_done_s")
+    interval("capture -> probe (aggregate pipeline)", "source_capture_s", "source_probe_s",
+             ticks.get("observation_received_s", np.zeros_like(ticks["loop_us"])) > 0)
+    interval("probe -> publication", "source_probe_s", "source_publish_s",
+             ticks.get("observation_received_s", np.zeros_like(ticks["loop_us"])) > 0)
+    interval("publication -> consumption", "source_publish_s", "observation_received_s")
+    if "command_start_s" in ticks and "aiming" in ticks:
+        aiming = (ticks["aiming"] == 1) & (ticks["command_start_s"] > 0)
+        interval("source probe -> aim command return (all attempts)", "source_probe_s",
+                 "command_done_s", aiming)
+        interval("source capture -> aim command return (all attempts)", "source_capture_s",
+                 "command_done_s", aiming)
+        if "pan_write_status" in ticks and "tilt_write_status" in ticks:
+            ok = (ticks["pan_write_status"] == 1) & (ticks["tilt_write_status"] == 1)
+            interval("source capture -> aim command return (SDK writes OK)", "source_capture_s",
+                     "command_done_s", aiming & ok)
+            print(f"aim commands with failed/unavailable SDK writes: {np.sum(aiming & ~ok)}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("run")
@@ -527,6 +583,7 @@ def main():
         if frames and frames["frame_id"].size:
             report_timing(frames, ticks)
             report_filter(frames, gcfg)
+        report_performance(ticks)
         report_motors(ticks)
         report_overshoot(ticks)
         if frames and frames["frame_id"].size:
